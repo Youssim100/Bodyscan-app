@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Body Scan</title>
+  <meta name="description" content="A calm, guided body scan meditation.">
+  <meta name="theme-color" content="#f5f3ee" id="theme-color">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" id="status-style">
+  <meta name="apple-mobile-web-app-title" content="Body Scan">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/styles.css">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    try {
+      const t = JSON.parse(localStorage.getItem('bodyscan.v1') || '{}').theme;
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    } catch (e) { /* storage unavailable */ }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#setup-main">Skip to session setup</a>
+
+  <!-- ============ Setup ============ -->
+  <div id="screen-setup" class="screen">
+    <header class="topbar">
+      <h1 class="brand"><svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="3"/><path d="M12 9c-3 0-5 2-5 5v1h10v-1c0-3-2-5-5-5zM8 17h8l-1 5H9z"/></svg>Body Scan</h1>
+      <button class="icon-btn" id="open-settings" aria-label="Settings" aria-haspopup="dialog">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </header>
+
+    <main id="setup-main" class="content">
+      <p class="lede">Settle in. Choose how long, where to rest your attention, and who guides you. You can pause or stop at any time.</p>
+      <p class="offline-banner" id="offline-banner" role="status" hidden></p>
+
+      <section class="card" id="recent-card" hidden aria-labelledby="recent-h">
+        <h2 id="recent-h">Recent</h2>
+        <div class="chip-row" id="recent-list"></div>
+      </section>
+
+      <section class="card" aria-labelledby="duration-h">
+        <h2 id="duration-h">Session length</h2>
+        <div class="chip-row" role="radiogroup" aria-labelledby="duration-h" id="duration-presets"></div>
+        <div class="stepper" role="group" aria-label="Custom length in minutes">
+          <button class="icon-btn small" id="dur-minus" aria-label="One minute shorter">−</button>
+          <output id="dur-value" aria-live="polite">10 min</output>
+          <button class="icon-btn small" id="dur-plus" aria-label="One minute longer">+</button>
+        </div>
+        <p class="hint" id="dur-hint"></p>
+      </section>
+
+      <section class="card" aria-labelledby="parts-h">
+        <div class="card-head">
+          <h2 id="parts-h">Body parts</h2>
+          <div class="segmented" role="tablist" aria-label="Choose body parts with">
+            <button role="tab" id="tab-diagram" aria-controls="panel-diagram" aria-selected="true">Diagram</button>
+            <button role="tab" id="tab-list" aria-controls="panel-list" aria-selected="false" tabindex="-1">List</button>
+          </div>
+        </div>
+
+        <div id="panel-diagram" role="tabpanel" aria-labelledby="tab-diagram">
+          <div id="body-diagram" class="body-diagram"></div>
+          <p class="legend"><span class="legend-swatch on" aria-hidden="true"></span> Striped with a check = included <span class="legend-swatch" aria-hidden="true"></span> Plain = left out</p>
+        </div>
+
+        <div id="panel-list" role="tabpanel" aria-labelledby="tab-list" hidden>
+          <label class="search">
+            <span class="visually-hidden">Filter body parts</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input type="search" id="part-filter" placeholder="Filter body parts" autocomplete="off">
+          </label>
+          <ul class="part-list" id="part-list" aria-label="Body parts"></ul>
+          <p class="hint" id="filter-empty" hidden>No body parts match your filter.</p>
+        </div>
+
+        <div class="row gap">
+          <button class="btn ghost" id="select-all">Select all</button>
+          <button class="btn ghost" id="select-none">Clear</button>
+        </div>
+        <p class="selection-summary" id="selection-summary" aria-live="polite"></p>
+        <p class="error" id="selection-error" role="alert" hidden>Choose at least one body part to begin.</p>
+      </section>
+
+      <section class="card" aria-labelledby="order-h">
+        <div class="card-head">
+          <h2 id="order-h">Scan order</h2>
+          <div class="row gap-s">
+            <button class="btn ghost small" id="order-down">Head to toe</button>
+            <button class="btn ghost small" id="order-up">Toe to head</button>
+          </div>
+        </div>
+        <details class="order-details" id="order-details">
+          <summary><span id="order-summary">Head to toe</span><span class="summary-action">Change order</span></summary>
+          <ol class="order-list" id="order-list" aria-label="Scan order"></ol>
+        </details>
+        <p class="visually-hidden" id="order-status" aria-live="polite"></p>
+      </section>
+
+      <section class="card" aria-labelledby="guidance-h">
+        <h2 id="guidance-h">Guidance</h2>
+        <fieldset>
+          <legend>Style</legend>
+          <div class="choice-list" id="style-list"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Narrator</legend>
+          <div class="choice-list" id="narrator-list"></div>
+        </fieldset>
+      </section>
+
+      <section class="card" aria-labelledby="sound-h">
+        <h2 id="sound-h">Sound</h2>
+        <div class="volume" id="voice-volume-row">
+          <button class="icon-btn small mute" id="voice-mute" aria-pressed="false" aria-label="Mute narration"></button>
+          <label for="voice-volume">Narration</label>
+          <input type="range" id="voice-volume" min="0" max="100" step="5">
+          <output for="voice-volume" id="voice-volume-out"></output>
+        </div>
+        <div class="volume" id="sound-volume-row">
+          <button class="icon-btn small mute" id="sound-mute" aria-pressed="false" aria-label="Mute background sound and chimes"></button>
+          <label for="sound-volume">Background &amp; chimes</label>
+          <input type="range" id="sound-volume" min="0" max="100" step="5">
+          <output for="sound-volume" id="sound-volume-out"></output>
+        </div>
+        <fieldset>
+          <legend>Background sound</legend>
+          <div class="chip-row" id="ambience-list"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Between body parts</legend>
+          <div class="chip-row" id="transition-list"></div>
+        </fieldset>
+      </section>
+
+      <div class="spacer"></div>
+    </main>
+
+    <div class="bottom-bar">
+      <button class="btn primary wide" id="review-btn">Review session</button>
+    </div>
+  </div>
+
+  <!-- ============ Player ============ -->
+  <div id="screen-player" class="screen player" hidden>
+    <main class="player-main" aria-labelledby="player-part">
+      <p class="eyebrow" id="player-step">Getting ready</p>
+      <h2 id="player-part" class="player-part" tabindex="-1">Settling in</h2>
+      <p class="player-next" id="player-next"></p>
+
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="ring-track" cx="60" cy="60" r="52"/>
+          <circle class="ring-fill" id="ring-fill" cx="60" cy="60" r="52"/>
+        </svg>
+        <div class="ring-center">
+          <span class="time" id="player-remaining">0:00</span>
+          <span class="time-label">remaining</span>
+        </div>
+      </div>
+
+      <div class="part-track" id="part-track" aria-hidden="true"></div>
+      <p class="status" id="player-status" role="status" aria-live="polite"></p>
+    </main>
+
+    <div class="controls" role="group" aria-label="Session controls">
+      <button class="btn round" id="ctl-end" aria-label="End session">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span>End</span>
+      </button>
+      <button class="btn round primary big" id="ctl-pause" aria-label="Pause">
+        <svg viewBox="0 0 24 24" aria-hidden="true" id="pause-icon"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+        <span id="pause-text">Pause</span>
+      </button>
+      <button class="btn round" id="ctl-skip" aria-label="Skip to next body part">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5l9 7-9 7z"/><rect x="16" y="5" width="3" height="14" rx="1"/></svg><span>Skip</span>
+      </button>
+    </div>
+    <p class="comfort-note">You can pause or stop at any time.</p>
+  </div>
+
+  <!-- ============ Done ============ -->
+  <div id="screen-done" class="screen done" hidden>
+    <main class="done-main">
+      <div class="done-mark" aria-hidden="true">
+        <svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="22"/><path d="M14 24.5l7 7 13-14"/></svg>
+      </div>
+      <h2 id="done-title" tabindex="-1">Session complete</h2>
+      <p id="done-text"></p>
+      <div class="row gap center">
+        <button class="btn primary" id="done-again">Begin again</button>
+        <button class="btn" id="done-close">Back to setup</button>
+      </div>
+    </main>
+  </div>
+
+  <!-- ============ Review dialog ============ -->
+  <dialog id="review-dialog" aria-labelledby="review-h">
+    <form method="dialog" class="sheet">
+      <h2 id="review-h">Review your session</h2>
+      <dl class="summary" id="review-summary"></dl>
+      <details class="review-order">
+        <summary>Body parts in order</summary>
+        <ol id="review-order"></ol>
+      </details>
+      <p class="error" id="review-error" role="alert" hidden></p>
+      <p class="hint">You can pause, skip a body part or stop at any time.</p>
+      <div class="row gap end">
+        <button class="btn" value="cancel">Back</button>
+        <button class="btn primary" id="begin-btn" value="begin">Begin</button>
+      </div>
+      <p class="hint" id="loading-text" aria-live="polite"></p>
+    </form>
+  </dialog>
+
+  <!-- ============ Settings dialog ============ -->
+  <dialog id="settings-dialog" aria-labelledby="settings-h">
+    <form method="dialog" class="sheet">
+      <h2 id="settings-h">Settings</h2>
+      <fieldset>
+        <legend>Appearance</legend>
+        <div class="segmented wide" id="theme-list" role="radiogroup" aria-label="Appearance"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Session length includes</legend>
+        <div class="toggle-list">
+          <label class="toggle"><input type="checkbox" id="count-intro" aria-describedby="count-hint"><span>Opening</span></label>
+          <label class="toggle"><input type="checkbox" id="count-outro" aria-describedby="count-hint"><span>Closing</span></label>
+        </div>
+        <p class="hint" id="count-hint">On: the opening or closing fits inside the length you choose. Off: it's added on top, so body parts get the full length.</p>
+      </fieldset>
+
+      <h3>Interruptions</h3>
+      <ul class="info-list">
+        <li><strong>Calls, Siri or other audio:</strong> the session pauses. Tap Resume when you're ready.</li>
+        <li><strong>Switching apps or locking the phone:</strong> the session pauses and waits for you. The screen stays on during a session.</li>
+        <li><strong>Notifications:</strong> banners don't stop the session.</li>
+        <li><strong>No internet:</strong> everything, including all voices, is stored on your phone, so sessions play offline.</li>
+      </ul>
+      <p class="hint" id="offline-status"></p>
+      <p class="hint" id="offline-detail">Offline check: waiting for the offline helper…</p>
+
+      <h3>Saved preferences</h3>
+      <p class="hint">Your last choices and recent sessions are kept on this device only.</p>
+      <div class="row gap top">
+        <button class="btn" type="button" id="forget-prefs">Forget my choices</button>
+      </div>
+      <div class="row end">
+        <button class="btn primary" value="close">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
