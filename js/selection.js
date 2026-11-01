@@ -3,10 +3,15 @@
 // The selection itself is a flat list of part ids. The UI works with coarser ideas:
 //   region  head, torso, arms, legs
 //   node    one area of a limb: shoulder, upperArm, elbow, forearm, wrist, hand | thigh, knee, shin, calf, ankle, foot
-//   level   how finely a hand or foot is split: 'whole', 'detailed' (one step, narrated in detail), 'parts' (palm, back, fingers / heel, sole, top, toes)
-//           or 'named' (every finger or toe by name; needs the sides scanned one at a time)
-//   mode    arms and legs: 'together' (both sides in one step) or 'separate' (left, then right)
-import { PART_BY_ID, AREAS, partId } from './content.js';
+//   scope   a limb's "limb" part (shoulder to wrist, thigh to ankle) or its "detail" part (the hand or foot)
+//   mode    for each scope (arms, legs, hands, feet): 'together' (both sides in one step) or 'separate' (left, then right)
+//   level   how finely a hand or foot is walked through:
+//             'whole'     one step
+//             'parts'     palm, back of hand, fingers | heel, sole, top, toes
+//             'named'     palm, back of hand and every finger by name | heel, sole, top and every toe by name
+//             'detailed'  the same steps as 'named', chosen as one item
+//           'named' and 'detailed' need hands or feet one side at a time (individual fingers and toes exist per side).
+import { PART_BY_ID, AREAS, partId, scopeOf } from './content.js';
 
 export const NODES = {
   arm: ['shoulder', 'upperArm', 'elbow', 'forearm', 'wrist', 'hand'],
@@ -26,14 +31,22 @@ export const REGIONS = ['head', 'torso', 'arms', 'legs'];
 const REGION_LIMB = { arms: 'arm', legs: 'leg' };
 const CORE_IDS = { head: ['head', 'face', 'jaw', 'neck'], torso: ['chest', 'upperBack', 'abdomen', 'lowerBack', 'hips'] };
 
-export const DEFAULT_CONFIG = { armMode: 'together', legMode: 'together', handLevel: 'whole', footLevel: 'whole', firstSide: 'L' };
+export const DEFAULT_CONFIG = {
+  armMode: 'together', legMode: 'together', handMode: 'together', footMode: 'together',
+  handLevel: 'whole', footLevel: 'whole', firstSide: 'L',
+};
 
-const modeOf = (cfg, limb) => (limb === 'arm' ? cfg.armMode : cfg.legMode);
+export const nodeScope = (limb, node) => (node === DETAIL_NODE[limb] ? 'detail' : 'limb');
+const MODE_KEY = { arm: { limb: 'armMode', detail: 'handMode' }, leg: { limb: 'legMode', detail: 'footMode' } };
+export const modeKey = (limb, scope) => MODE_KEY[limb][scope];
+const modeFor = (cfg, limb, scope) => cfg[MODE_KEY[limb][scope]];
 const levelOf = (cfg, limb) => (limb === 'arm' ? cfg.handLevel : cfg.footLevel);
-// The sets a limb is scanned as, in scan order.
-export const setsFor = (cfg, limb) => (modeOf(cfg, limb) === 'together' ? ['B'] : cfg.firstSide === 'R' ? ['R', 'L'] : ['L', 'R']);
+// The sets a scope of a limb is scanned as, in scan order.
+export const setsFor = (cfg, limb, scope = 'limb') =>
+  (modeFor(cfg, limb, scope) === 'together' ? ['B'] : cfg.firstSide === 'R' ? ['R', 'L'] : ['L', 'R']);
+export const setsForNode = (cfg, limb, node) => setsFor(cfg, limb, nodeScope(limb, node));
 // Individual fingers and toes only exist per side, so "both together" falls back to the group.
-export const effectiveLevel = (level, set) => (set === 'B' && level === 'named' ? 'parts' : level);
+export const effectiveLevel = (level, set) => (set === 'B' && (level === 'named' || level === 'detailed') ? 'parts' : level);
 
 // ---------------------------------------------------------------- nodes
 // Ids that make up one node at a level (a hand at 'parts' is palm + back of hand + fingers).
@@ -54,7 +67,6 @@ export function status(selected, ids) {
   return n === 0 ? 'off' : n === ids.length ? 'on' : 'partial';
 }
 export const nodeStatus = (selected, limb, set, node, cfg) => status(selected, nodeLeaves(limb, set, node, levelOf(cfg, limb)));
-export const nodeAnySelected = (selected, limb, set, node) => nodeAllLeaves(limb, set, node).some((id) => selected.includes(id));
 
 const without = (list, ids) => list.filter((id) => !ids.includes(id));
 const withIds = (list, ids) => [...list, ...ids.filter((id) => !list.includes(id))];
@@ -69,10 +81,11 @@ export function toggleId(selected, id) {
 }
 
 // ---------------------------------------------------------------- regions
+const allNodeIds = (limb, cfg, nodes = NODES[limb]) =>
+  nodes.flatMap((node) => setsForNode(cfg, limb, node).flatMap((set) => nodeLeaves(limb, set, node, levelOf(cfg, limb))));
 export function regionIds(region, cfg) {
   if (CORE_IDS[region]) return CORE_IDS[region];
-  const limb = REGION_LIMB[region];
-  return setsFor(cfg, limb).flatMap((set) => NODES[limb].flatMap((node) => nodeLeaves(limb, set, node, levelOf(cfg, limb))));
+  return allNodeIds(REGION_LIMB[region], cfg);
 }
 export function regionStatus(selected, region, cfg) {
   return status(selected, regionIds(region, cfg));
@@ -89,30 +102,33 @@ export function toggleRegion(selected, region, cfg) {
 }
 export const wholeBody = (cfg) => REGIONS.flatMap((r) => regionIds(r, cfg));
 
-// One side of a limb ("Left arm") as a unit.
-export const setIds = (limb, set, cfg) => NODES[limb].flatMap((node) => nodeLeaves(limb, set, node, levelOf(cfg, limb)));
+// One side of a limb ("Left arm") as a unit: the nodes that are scanned per side for this set.
+const nodesInSet = (limb, set, cfg) => NODES[limb].filter((node) => setsForNode(cfg, limb, node).includes(set));
+export const setIds = (limb, set, cfg) =>
+  nodesInSet(limb, set, cfg).flatMap((node) => nodeLeaves(limb, set, node, levelOf(cfg, limb)));
 export function toggleSet(selected, limb, set, cfg) {
   const on = status(selected, setIds(limb, set, cfg)) !== 'on';
-  const cleared = without(selected, NODES[limb].flatMap((node) => nodeAllLeaves(limb, set, node)));
+  const cleared = without(selected, nodesInSet(limb, set, cfg).flatMap((node) => nodeAllLeaves(limb, set, node)));
   return on ? withIds(cleared, setIds(limb, set, cfg)) : cleared;
 }
 
 // ---------------------------------------------------------------- changing how arms/legs/hands/feet are split
-// Switch a limb between "together" and "one at a time", carrying the chosen areas over.
-export function changeMode(selected, limb, from, to) {
+// Switch one scope of a limb (arms, legs, hands or feet) between "together" and "one at a time",
+// carrying the chosen areas over.
+export function changeMode(selected, limb, scope, from, to) {
   if (from === to) return selected;
   const oldSets = from === 'together' ? ['B'] : ['L', 'R'];
   const newSets = to === 'together' ? ['B'] : ['L', 'R'];
-  const keys = new Set();
-  for (const id of selected) {
-    const p = PART_BY_ID[id];
-    if (p?.limb === limb && oldSets.includes(p.set)) keys.add(p.key);
-  }
-  let next = selected.filter((id) => !(PART_BY_ID[id]?.limb === limb && oldSets.includes(PART_BY_ID[id].set)));
+  const inScope = (id) => { const p = PART_BY_ID[id]; return p?.limb === limb && p.scope === scope && oldSets.includes(p.set); };
+  const keys = new Set(selected.filter(inScope).map((id) => PART_BY_ID[id].key));
+  let next = selected.filter((id) => !inScope(id));
   const group = DIGITS[DETAIL_NODE[limb]];
   for (const key of keys) {
-    const k = to === 'together' && group.named.includes(key) ? group.group : key; // no named digits in "together"
-    for (const set of newSets) next = withIds(next, [partId(limb, set, k)]);
+    // No individual fingers or toes in "together": they fall back to the group (or the parts).
+    let k = key;
+    if (to === 'together' && group.named.includes(key)) k = group.group;
+    if (to === 'together' && key === `${DETAIL_NODE[limb]}Detail`) k = DETAIL_NODE[limb];
+    for (const set of newSets) next = withIds(next, [partId(limb, set, k)].filter(Boolean));
   }
   return next;
 }
@@ -128,16 +144,16 @@ export function changeLevel(selected, limb, from, to) {
     const had = all.filter((id) => selected.includes(id));
     if (!had.length) continue;
     const oldKeys = had.map((id) => PART_BY_ID[id].key);
+    const eff = effectiveLevel(to, set);
     let keys;
-    if (to === 'whole') keys = [detail];
-    else if (to === 'detailed') keys = [`${detail}Detail`];
-    else if (oldKeys.includes(detail) || oldKeys.includes(`${detail}Detail`)) keys = LEAVES[detail][effectiveLevel(to, set)];
+    if (eff === 'whole') keys = [detail];
+    else if (eff === 'detailed') keys = [`${detail}Detail`];
+    else if (oldKeys.includes(detail) || oldKeys.includes(`${detail}Detail`)) keys = LEAVES[detail][eff];
     else {
       keys = [];
       for (const k of oldKeys) {
-        if (k === digits.group || digits.named.includes(k)) {
-          keys.push(...(effectiveLevel(to, set) === 'named' ? digits.named : [digits.group]));
-        } else keys.push(k);
+        if (k === digits.group || digits.named.includes(k)) keys.push(...(eff === 'named' ? digits.named : [digits.group]));
+        else keys.push(k);
       }
     }
     next = withIds(without(next, all), [...new Set(keys)].map((k) => partId(limb, set, k)).filter(Boolean));
@@ -150,19 +166,22 @@ export function inferConfig(selected, cfg = DEFAULT_CONFIG) {
   const out = { ...cfg };
   for (const limb of ['arm', 'leg']) {
     const parts = selected.map((id) => PART_BY_ID[id]).filter((p) => p?.limb === limb);
-    if (parts.some((p) => p.set !== 'B')) out[limb === 'arm' ? 'armMode' : 'legMode'] = 'separate';
-    else if (parts.length) out[limb === 'arm' ? 'armMode' : 'legMode'] = 'together';
+    for (const scope of ['limb', 'detail']) {
+      const inScope = parts.filter((p) => p.scope === scope);
+      if (inScope.some((p) => p.set !== 'B')) out[modeKey(limb, scope)] = 'separate';
+      else if (inScope.length) out[modeKey(limb, scope)] = 'together';
+    }
     const detail = DETAIL_NODE[limb];
-    const keys = new Set(parts.map((p) => p.key));
-    const group = DIGITS[detail];
-    const lvl = group.named.some((k) => keys.has(k)) ? 'named'
-      : [...LEAVES[detail].parts].some((k) => keys.has(k)) ? 'parts'
-        : keys.has(detail) ? 'whole' : keys.has(`${detail}Detail`) ? 'detailed' : null;
+    const keys = new Set(parts.filter((p) => p.scope === 'detail').map((p) => p.key));
+    const lvl = DIGITS[detail].named.some((k) => keys.has(k)) ? 'named'
+      : keys.has(`${detail}Detail`) ? 'detailed'
+        : LEAVES[detail].parts.some((k) => keys.has(k)) ? 'parts'
+          : keys.has(detail) ? 'whole' : null;
     if (lvl) out[limb === 'arm' ? 'handLevel' : 'footLevel'] = lvl;
+    // Individual fingers and toes need that hand or foot one side at a time.
+    const lk = limb === 'arm' ? 'handLevel' : 'footLevel';
+    if (out[modeKey(limb, 'detail')] === 'together' && (out[lk] === 'named' || out[lk] === 'detailed')) out[lk] = 'parts';
   }
-  // Individual fingers and toes need one side at a time.
-  if (out.armMode === 'together' && out.handLevel === 'named') out.handLevel = 'parts';
-  if (out.legMode === 'together' && out.footLevel === 'named') out.footLevel = 'parts';
   const firstR = selected.findIndex((id) => PART_BY_ID[id]?.set === 'R');
   const firstL = selected.findIndex((id) => PART_BY_ID[id]?.set === 'L');
   if (firstR >= 0 && firstL >= 0) out.firstSide = firstR < firstL ? 'R' : 'L';
@@ -171,24 +190,44 @@ export function inferConfig(selected, cfg = DEFAULT_CONFIG) {
 }
 
 // ---------------------------------------------------------------- order
-const ARM_KEYS = AREAS.arm.map((a) => a.key);
-const LEG_KEYS = AREAS.leg.map((a) => a.key);
-function limbBlock(limb, cfg, direction) {
-  const keys = limb === 'arm' ? ARM_KEYS : LEG_KEYS;
-  const sets = cfg.firstSide === 'R' ? ['B', 'R', 'L'] : ['B', 'L', 'R'];
-  return sets.flatMap((set) => {
-    const ids = keys.map((k) => partId(limb, set, k)).filter(Boolean);
+const KEYS = { arm: AREAS.arm.map((a) => a.key), leg: AREAS.leg.map((a) => a.key) };
+// The runs one limb is scanned in: [{ set, keys }]. When arms and hands are split the same way,
+// each side is one run ("left arm, hand included"); otherwise the hands get their own runs after the arms.
+function limbRuns(limb, cfg) {
+  const keys = KEYS[limb];
+  const limbSets = setsFor(cfg, limb, 'limb');
+  const detailSets = setsFor(cfg, limb, 'detail');
+  if (limbSets.join() === detailSets.join()) return limbSets.map((set) => ({ set, keys }));
+  const pick = (scope) => keys.filter((k) => scopeOf(limb, k) === scope);
+  return [
+    ...limbSets.map((set) => ({ set, keys: pick('limb') })),
+    ...detailSets.map((set) => ({ set, keys: pick('detail') })),
+  ];
+}
+function limbOrder(limb, cfg, direction) {
+  const idsOf = (run) => run.keys.map((k) => partId(limb, run.set, k)).filter(Boolean);
+  let runs = limbRuns(limb, cfg).map((run) => ({ run, ids: idsOf(run) }));
+  if (direction === 'up') {
+    runs = runs.map((r) => ({ ...r, ids: [...r.ids].reverse() }));
+    // toe to head: when hands/feet have their own runs they come first
+    runs.sort((a, b) => (scopeOf(limb, b.run.keys[0]) === 'detail') - (scopeOf(limb, a.run.keys[0]) === 'detail'));
+  }
+  const primary = runs.flatMap((r) => r.ids);
+  // parts that belong to other modes (e.g. left/right ids while "together") still have a place in the full order
+  const rest = ['B', 'L', 'R'].flatMap((set) => {
+    const ids = KEYS[limb].map((k) => partId(limb, set, k)).filter((id) => id && !primary.includes(id));
     return direction === 'up' ? ids.reverse() : ids;
   });
+  return [...primary, ...rest];
 }
 // Every part id in scan order. Head to toe puts each arm and leg together, one after the other;
 // toe to head reverses the order within each limb but still starts with the same side.
 export function canonicalOrder(direction, cfg) {
   const { head, torso } = CORE_IDS;
   if (direction === 'up') {
-    return [...limbBlock('leg', cfg, 'up'), ...[...torso].reverse(), ...limbBlock('arm', cfg, 'up'), ...[...head].reverse()];
+    return [...limbOrder('leg', cfg, 'up'), ...[...torso].reverse(), ...limbOrder('arm', cfg, 'up'), ...[...head].reverse()];
   }
-  return [...head, ...limbBlock('arm', cfg, 'down'), ...torso, ...limbBlock('leg', cfg, 'down')];
+  return [...head, ...limbOrder('arm', cfg, 'down'), ...torso, ...limbOrder('leg', cfg, 'down')];
 }
 
 // Keep a saved custom order, slotting any part it doesn't know yet in after its usual neighbour.

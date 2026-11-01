@@ -103,26 +103,32 @@
 
       <section class="card" aria-labelledby="detail-h">
         <h2 id="detail-h">Arms, legs, hands and feet</h2>
-        <p class="hint tight">Left and right mean your own left and right. When a limb is scanned on its own, the narrator introduces it ("Now, your left arm only") so you only need to attend to one side at a time.</p>
-        <fieldset>
-          <legend>Arms</legend>
-          <div class="chip-row" id="arm-mode"></div>
-        </fieldset>
-        <fieldset>
-          <legend>Legs</legend>
-          <div class="chip-row" id="leg-mode"></div>
-        </fieldset>
+        <p class="hint tight">Left and right mean your own left and right. Arms, legs, hands and feet can each be scanned together or one side at a time. When one is scanned on its own, the narrator introduces it ("Now, your left hand only") so you only need to attend to one side at a time.</p>
+        <div class="limb-group">
+          <h3 class="limb-title">Arms</h3>
+          <div class="segmented wide" id="arm-mode" role="radiogroup" aria-label="Arms: which sides"></div>
+          <div class="limb-child">
+            <h4 class="limb-title">Hands <span class="limb-note">part of the arms</span></h4>
+            <p class="sub-label">Sides</p>
+            <div class="segmented wide" id="hand-mode" role="radiogroup" aria-label="Hands: which sides"></div>
+            <p class="sub-label">How much detail</p>
+            <div class="choice-list" id="hand-level" role="radiogroup" aria-label="Hands: how much detail"></div>
+          </div>
+        </div>
+        <div class="limb-group">
+          <h3 class="limb-title">Legs</h3>
+          <div class="segmented wide" id="leg-mode" role="radiogroup" aria-label="Legs: which sides"></div>
+          <div class="limb-child">
+            <h4 class="limb-title">Feet <span class="limb-note">part of the legs</span></h4>
+            <p class="sub-label">Sides</p>
+            <div class="segmented wide" id="foot-mode" role="radiogroup" aria-label="Feet: which sides"></div>
+            <p class="sub-label">How much detail</p>
+            <div class="choice-list" id="foot-level" role="radiogroup" aria-label="Feet: how much detail"></div>
+          </div>
+        </div>
         <fieldset id="side-fieldset">
-          <legend>Start with</legend>
+          <legend>When a side goes first, start with</legend>
           <div class="chip-row" id="first-side"></div>
-        </fieldset>
-        <fieldset>
-          <legend>Hands</legend>
-          <div class="chip-row" id="hand-level"></div>
-        </fieldset>
-        <fieldset>
-          <legend>Feet</legend>
-          <div class="chip-row" id="foot-level"></div>
         </fieldset>
         <p class="hint" id="detail-status" aria-live="polite"></p>
       </section>

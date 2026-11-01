@@ -58,9 +58,19 @@ export class AudioEngine {
     return p;
   }
 
+  // Loads every clip; a clip that fails is tried once more. Throws an error listing the clips that still failed.
   async loadClips(narrator, ids, onProgress) {
     let done = 0;
-    await Promise.all(ids.map((id) => this.loadClip(narrator, id).then(() => onProgress?.(++done, ids.length))));
+    const one = (id) => this.loadClip(narrator, id)
+      .catch(() => this.loadClip(narrator, id))
+      .then(() => { onProgress?.(++done, ids.length); return null; })
+      .catch((err) => ({ id, reason: String(err?.message ?? err) }));
+    const failed = (await Promise.all(ids.map(one))).filter(Boolean);
+    if (failed.length) {
+      const err = new Error(`${failed.length} clip(s) failed: ${failed.slice(0, 3).map((f) => f.reason).join('; ')}`);
+      err.failed = failed;
+      throw err;
+    }
   }
 
   // ---- Preview -------------------------------------------------------------

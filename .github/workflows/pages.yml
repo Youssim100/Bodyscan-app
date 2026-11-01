@@ -30,8 +30,8 @@ jobs:
           rsync -a --exclude '.git' --exclude '.github' --exclude '_site' ./ _site/
           test -f _site/index.html
           clips=$(find _site/audio -name '*.mp3' | wc -l)
-          echo "Voice clips found: $clips (should be 848)"
-          test "$clips" -eq 848
+          echo "Voice clips found: $clips (should be 832)"
+          test "$clips" -eq 832
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

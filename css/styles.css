@@ -214,6 +214,20 @@ legend { font-weight: 600; font-size: 0.95rem; margin-bottom: 8px; padding: 0; }
 .hint.tight { margin: -4px 0 12px; }
 .center-text { text-align: center; }
 
+/* Arms contain hands, legs contain feet: the hand or foot sits inside its limb's box, marked with an accent bar. */
+.limb-group { border: 1.5px solid var(--line); border-radius: 16px; padding: 14px; margin-top: 14px; }
+.limb-title { font-size: 1.05rem; margin: 0 0 10px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.limb-child { margin-top: 14px; padding: 12px 12px 14px; background: var(--surface-2); border-left: 4px solid var(--accent); border-radius: 4px 14px 14px 4px; }
+.limb-child .limb-title { font-size: 1rem; }
+.limb-note { font-family: var(--font); font-weight: 500; font-size: 0.8rem; color: var(--muted); }
+.sub-label { margin: 12px 0 6px; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.limb-group > .segmented { margin: 0; }
+.limb-child .choice { background: var(--surface); }
+.limb-group .segmented .chip span { padding: 0 6px; font-size: 0.9rem; white-space: nowrap; justify-content: center; }
+.limb-child .choice-text { gap: 2px; }
+.choice-tag { justify-self: start; margin-top: 6px; font-size: 0.72rem; font-weight: 700; color: var(--accent-strong); background: var(--accent-soft); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.segmented.wide .chip { flex: 1; }
+
 /* ---------- Profiles ---------- */
 .profile-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
 .profile-list:empty { display: none; }

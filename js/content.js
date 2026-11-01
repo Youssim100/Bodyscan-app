@@ -35,9 +35,10 @@ export const AREAS = {
     area('forearm', 'forearm', 'forearms', 'Simply notice whatever is here.', 'Simply notice whatever is here.', 'forearms'),
     area('wrist', 'wrist', 'wrists', 'Notice any warmth, or tingling.', 'Notice any warmth, or tingling.', 'wrists'),
     area('hand', 'hand', 'hands', 'The palm, the back of the hand, and each finger.', 'The palms, the backs of the hands, and each finger.', 'hands', 'palm fingers'),
-    area('handDetail', 'hand in detail', 'hands in detail', 'Begin with the palm... then the back of the hand... and now each finger in turn. The thumb, the index finger, the middle finger, the ring finger, and the little finger.', 'Begin with the palms... then the backs of the hands... and now each finger in turn. The thumbs, the index fingers, the middle fingers, the ring fingers, and the little fingers.', 'handsDetail', 'palm fingers thumb', {
-      one: (w) => `your ${w} hand, in detail`, npBoth: 'both hands, in detail',
-      titleOne: (w) => `${cap(w)} hand in detail`, titleBoth: 'Both hands in detail', label: 'Hand in detail', labelPl: 'Hands in detail',
+    // "In detail" is one item in the selection that expands into palm, back of hand and every finger, each its own timed step.
+    area('handDetail', 'hand in detail', 'hands in detail', '', '', null, 'palm fingers thumb', {
+      one: (w) => `your ${w} hand, in detail`, titleOne: (w) => `${cap(w)} hand in detail`, label: 'Hand in detail',
+      expandsTo: ['palm', 'backHand', 'thumb', 'index', 'middle', 'ring', 'little'],
     }),
     area('palm', 'palm', 'palms', 'Feel what it rests on.', 'Feel what they rest on.', 'palms', 'hand'),
     area('backHand', 'back of the hand', 'backs of the hands', 'Notice the skin, and the air around it.', 'Notice the skin, and the air around it.', 'backHands', 'hand', {
@@ -61,9 +62,9 @@ export const AREAS = {
     area('calf', 'calf', 'calves', 'Let it grow heavy.', 'Let them grow heavy.', 'calves', 'lower leg'),
     area('ankle', 'ankle', 'ankles', 'Notice the joint, loose and supported.', 'Notice the joints, loose and supported.', 'ankles'),
     area('foot', 'foot', 'feet', 'The heel, the sole, the top, and each toe.', 'The heels, the soles, the tops, and each toe.', 'feet', 'heel sole toes'),
-    area('footDetail', 'foot in detail', 'feet in detail', 'Begin with the heel... then the sole... then the top of the foot... and now each toe in turn. The big toe, the second, the third, the fourth, and the little toe.', 'Begin with the heels... then the soles... then the tops of the feet... and now each toe in turn. The big toes, the second, the third, the fourth, and the little toes.', 'feetDetail', 'heel sole toes', {
-      one: (w) => `your ${w} foot, in detail`, npBoth: 'both feet, in detail',
-      titleOne: (w) => `${cap(w)} foot in detail`, titleBoth: 'Both feet in detail', label: 'Foot in detail', labelPl: 'Feet in detail',
+    area('footDetail', 'foot in detail', 'feet in detail', '', '', null, 'heel sole toes', {
+      one: (w) => `your ${w} foot, in detail`, titleOne: (w) => `${cap(w)} foot in detail`, label: 'Foot in detail',
+      expandsTo: ['heel', 'sole', 'top', 'bigToe', 'secondToe', 'thirdToe', 'fourthToe', 'littleToe'],
     }),
     area('heel', 'heel', 'heels', 'Notice where it touches the surface.', 'Notice where they touch the surface.', 'heels', 'foot'),
     area('sole', 'sole', 'soles', 'Notice the whole underside.', 'Notice the whole underside.', 'soles', 'foot', {
@@ -92,6 +93,15 @@ export const LIMB_NAME = { arm: 'arm', leg: 'leg' };
 export const LIMB_PLURAL = { arm: 'arms', leg: 'legs' };
 
 // ---------------------------------------------------------------- ids and wording
+// A limb splits into its "limb" part (shoulder to wrist, thigh to ankle) and its "detail" part (the hand or foot
+// and everything inside it). Each can be scanned together or one side at a time, independently.
+const DETAIL_FROM = { arm: 'hand', leg: 'foot' };
+const DETAIL_KEYS = Object.fromEntries(Object.entries(AREAS).map(([limb, list]) =>
+  [limb, new Set(list.slice(list.findIndex((a) => a.key === DETAIL_FROM[limb])).map((a) => a.key))]));
+export const scopeOf = (limb, key) => (DETAIL_KEYS[limb].has(key) ? 'detail' : 'limb');
+// What the narrator calls the unit that is scanned on its own: the arm, the leg, the hand or the foot.
+const UNIT = { arm: { limb: 'arm', detail: 'hand' }, leg: { limb: 'leg', detail: 'foot' } };
+
 // Id of an area on a set: 'B' uses the plural id ("shoulders"), 'L' and 'R' use "armL_shoulder".
 // Returns null where no such step exists (individual fingers and toes have no "both" version).
 export function partId(limb, set, key) {
@@ -122,7 +132,11 @@ export function describe(limb, a, set) {
   };
 }
 
-const GROUP_LABEL = (limb, set) => (set === 'B' ? `Both ${LIMB_PLURAL[limb]}` : `${cap(SIDE_WORD[set])} ${LIMB_NAME[limb]}`);
+const GROUP_LABEL = (limb, set, scope) => {
+  const noun = scope === 'detail' ? { arm: 'hand', leg: 'foot' }[limb] : LIMB_NAME[limb];
+  const plural = scope === 'detail' ? { arm: 'hands', leg: 'feet' }[limb] : LIMB_PLURAL[limb];
+  return set === 'B' ? `Both ${plural}` : `${cap(SIDE_WORD[set])} ${noun}`;
+};
 
 // ---------------------------------------------------------------- the catalogue
 export const BODY_PARTS = [];
@@ -144,10 +158,14 @@ for (const limb of ['arm', 'leg']) {
         label: d.label,
         keywords: `${a.sg} ${a.pl} ${a.kw} ${LIMB_NAME[limb]} ${set === 'B' ? 'both' : SIDE_WORD[set]}`.toLowerCase(),
         region: LIMB_PLURAL[limb],
-        group: GROUP_LABEL(limb, set),
+        group: GROUP_LABEL(limb, set, scopeOf(limb, a.key)),
         limb,
         set,
         key: a.key,
+        scope: scopeOf(limb, a.key),
+        unit: UNIT[limb][scopeOf(limb, a.key)],
+        // "In detail" items have no narration of their own: they play as the steps listed here.
+        expandsTo: a.expandsTo ? a.expandsTo.map((k) => partId(limb, set, k)) : null,
       });
     }
   }
@@ -200,27 +218,42 @@ export function partClip(style, partId) {
   return (style === 'cues' ? 'cue_' : 'guide_') + partId;
 }
 
-// When one arm or leg is scanned on its own, its first step is preceded by a short line
-// ("Now, bring your attention to your left arm only"). `parts` is the scan order.
-// The line is the "first" version unless the other side of the same limb already came earlier.
+// Items chosen as one thing that are walked through as several timed steps ("left hand in detail" becomes
+// palm, back of hand, thumb, index finger, ...). Every step gets its own narration and an equal share of the time.
+export function expandParts(parts) {
+  return parts.flatMap((id) => PART_BY_ID[id]?.expandsTo ?? [id]);
+}
+
+// When one arm, leg, hand or foot is scanned on its own, its first step is preceded by a short line
+// ("Now, bring your attention to your left arm only"). `parts` is the scan order, already expanded.
+// No line when the step continues the same side of the same limb (the left hand right after the left wrist).
+// The line is the "first" version unless the other side of the same kind already came earlier.
 export function entryClip(parts, i) {
   const p = PART_BY_ID[parts[i]];
   if (!p?.limb || p.set === 'B') return null;
-  const same = (id) => PART_BY_ID[id]?.limb === p.limb && PART_BY_ID[id]?.set === p.set;
-  if (i > 0 && same(parts[i - 1])) return null;
-  const other = parts.slice(0, i).some((id) => PART_BY_ID[id]?.limb === p.limb && PART_BY_ID[id]?.set !== p.set && PART_BY_ID[id]?.set !== 'B');
-  return `entry_${p.limb}${p.set}_${other ? 'second' : 'first'}`;
+  const prev = PART_BY_ID[parts[i - 1]];
+  if (i > 0 && prev?.limb === p.limb && prev.set === p.set) return null;
+  // Name the widest thing this run covers: toe to head starts at the fingers but the run is the whole arm.
+  let end = i;
+  while (PART_BY_ID[parts[end + 1]]?.limb === p.limb && PART_BY_ID[parts[end + 1]].set === p.set) end++;
+  const wide = parts.slice(i, end + 1).some((id) => PART_BY_ID[id].scope === 'limb');
+  const unit = wide ? p.limb : p.unit;
+  const other = parts.slice(0, i).some((id) => {
+    const q = PART_BY_ID[id];
+    return q?.unit === unit && q.set !== p.set && q.set !== 'B';
+  });
+  return `entry_${unit}${p.set}_${other ? 'second' : 'first'}`;
 }
 
-export const ENTRY_CLIPS = ['arm', 'leg'].flatMap((limb) =>
-  ['L', 'R'].flatMap((set) => ['first', 'second'].map((v) => `entry_${limb}${set}_${v}`)));
+export const ENTRY_CLIPS = ['arm', 'leg', 'hand', 'foot'].flatMap((unit) =>
+  ['L', 'R'].flatMap((set) => ['first', 'second'].map((v) => `entry_${unit}${set}_${v}`)));
 
 // Every clip a narrator needs for any session.
 export function allClipIds() {
   const ids = new Set(['preview', ...PROMPTS, ...ENTRY_CLIPS]);
   for (const style of Object.keys(SEQUENCES)) {
     for (const seq of Object.values(SEQUENCES[style])) seq.forEach((x) => typeof x === 'string' && ids.add(x));
-    BODY_PARTS.forEach((p) => ids.add(partClip(style, p.id)));
+    BODY_PARTS.filter((p) => !p.expandsTo).forEach((p) => ids.add(partClip(style, p.id)));
   }
   return [...ids];
 }

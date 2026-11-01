@@ -121,7 +121,7 @@ export function createBodyDiagram(container, api) {
           st = api.limbStatus(r.limb, r.side, r.node);
           label = api.label(r.limb, r.side, r.node);
           // "Together": left and right act as one, so only one of the pair takes keyboard focus.
-          if (api.isTogether(r.limb) && r.side !== 'L') focusable = false;
+          if (api.isTogether(r.limb, r.node) && r.side !== 'L') focusable = false;
         }
         r.region.classList.toggle('selected', st === 'on');
         r.region.classList.toggle('partial', st === 'partial');

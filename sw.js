@@ -4,7 +4,7 @@
 //    asks ('cache-audio'). An interrupted download resumes on the next visit, and
 //    progress is reported to the page.
 // Bump VERSION whenever app files change. Bump AUDIO_CACHE only when voice files change.
-const VERSION = 'bodyscan-v7';
+const VERSION = 'bodyscan-v11';
 const AUDIO_CACHE = 'bodyscan-audio-v2';
 const CORE = [
   './',

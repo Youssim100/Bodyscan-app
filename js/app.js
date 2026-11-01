@@ -1,8 +1,8 @@
 import {
-  PART_BY_ID, AREA_BY_KEY, REGION_LABEL, NARRATORS, STYLES, AMBIENCES, TRANSITIONS, describe,
+  PART_BY_ID, AREA_BY_KEY, REGION_LABEL, NARRATORS, STYLES, AMBIENCES, TRANSITIONS, describe, expandParts,
 } from './content.js';
 import {
-  DEFAULT_CONFIG, LEVELS, NODES, REGIONS, setsFor, nodeLeaves, nodeStatus, status, toggleNode, toggleId, toggleSet, setIds,
+  DEFAULT_CONFIG, LEVELS, NODES, REGIONS, modeKey, nodeScope, setsFor, nodeLeaves, nodeStatus, status, toggleNode, toggleId, toggleSet, setIds,
   regionIds, regionStatus, toggleRegion, wholeBody, changeMode, changeLevel, inferConfig,
   canonicalOrder, mergeOrder, migrateSelected, migrateDirection,
 } from './selection.js';
@@ -21,7 +21,7 @@ const MAX_PROFILES = 12;
 const DEFAULTS = {
   schema: 2,
   minutes: 10,
-  ...DEFAULT_CONFIG,           // armMode, legMode, handLevel, footLevel, firstSide
+  ...DEFAULT_CONFIG,           // armMode, legMode, handMode, footMode, handLevel, footLevel, firstSide
   selected: wholeBody(DEFAULT_CONFIG),
   direction: 'down',           // 'down' head to toe, 'up' toe to head, 'custom' uses `order`
   order: canonicalOrder('down', DEFAULT_CONFIG),
@@ -46,7 +46,7 @@ const DEFAULTS = {
 function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
-    const s = { ...structuredClone(DEFAULTS), ...saved };
+    const s = fromSaved(saved);
     // Version 1 saved fewer, coarser parts and a full order list; translate them.
     if (saved.schema !== 2 && Array.isArray(saved.selected)) {
       s.selected = migrateSelected(saved.selected);
@@ -60,23 +60,42 @@ function load() {
   }
 }
 
+// Defaults plus whatever was saved. Older saves had no setting for hands and feet (they followed the arms and legs),
+// and "both hands in detail" no longer exists as one step (it is palms, backs of hands and fingers).
+function fromSaved(data) {
+  const s = { ...structuredClone(DEFAULTS), ...structuredClone(data) };
+  if (!('handMode' in data)) s.handMode = s.armMode;
+  if (!('footMode' in data)) s.footMode = s.legMode;
+  const swap = { handsDetail: ['palms', 'backHands', 'fingers'], feetDetail: ['heels', 'soles', 'tops', 'toes'] };
+  for (const k of ['selected', 'order']) {
+    if (Array.isArray(s[k])) s[k] = s[k].flatMap((id) => swap[id] ?? [id]);
+  }
+  if (Array.isArray(s.recent)) {
+    s.recent = s.recent.map((r) => (r && Array.isArray(r.parts) ? { ...r, parts: r.parts.flatMap((id) => swap[id] ?? [id]) } : r));
+  }
+  return s;
+}
+
 // Guard against stale, edited or damaged data (also used for saved profiles).
 function normalize(s, migrate = false) {
   s.schema = 2;
   s.selected = [...new Set((Array.isArray(s.selected) ? s.selected : []).filter((id) => PART_BY_ID[id]))];
   if (!['together', 'separate'].includes(s.armMode)) s.armMode = DEFAULT_CONFIG.armMode;
   if (!['together', 'separate'].includes(s.legMode)) s.legMode = DEFAULT_CONFIG.legMode;
+  if (!['together', 'separate'].includes(s.handMode)) s.handMode = s.armMode;
+  if (!['together', 'separate'].includes(s.footMode)) s.footMode = s.legMode;
   if (!LEVELS.includes(s.handLevel)) s.handLevel = DEFAULT_CONFIG.handLevel;
   if (!LEVELS.includes(s.footLevel)) s.footLevel = DEFAULT_CONFIG.footLevel;
   if (!['L', 'R'].includes(s.firstSide)) s.firstSide = DEFAULT_CONFIG.firstSide;
   if (!['down', 'up', 'custom'].includes(s.direction)) s.direction = 'down';
   // Choices that only make sense together (e.g. named fingers need one arm at a time); drop limb ids the UI can't show.
   Object.assign(s, inferConfig([], s));
-  if (s.armMode === 'together' && s.handLevel === 'named') s.handLevel = 'parts';
-  if (s.legMode === 'together' && s.footLevel === 'named') s.footLevel = 'parts';
   s.selected = s.selected.filter((id) => {
     const p = PART_BY_ID[id];
-    return !p?.limb || setsFor(s, p.limb).includes(p.set);
+    if (!p?.limb) return true;
+    if (!setsFor(s, p.limb, p.scope).includes(p.set)) return false;
+    // hand and foot steps must belong to the chosen level (not e.g. both "in detail" and "palm")
+    return p.scope !== 'detail' || nodeLeaves(p.limb, p.set, p.limb === 'arm' ? 'hand' : 'foot', p.limb === 'arm' ? s.handLevel : s.footLevel).includes(id);
   });
   s.order = mergeOrder(Array.isArray(s.order) ? s.order : [], canonicalOrder('down', s));
   if (!['system', 'light', 'dark'].includes(s.theme)) s.theme = DEFAULTS.theme;
@@ -116,12 +135,14 @@ function fullOrder() {
   return state.direction === 'custom' ? mergeOrder(state.order, canonical) : canonical;
 }
 const scanOrder = () => fullOrder().filter((id) => state.selected.includes(id));
+// The steps that are really played: items chosen "in detail" expand into their parts, each with its own share of the time.
+const planParts = () => expandParts(scanOrder());
 
 function currentPlan() {
   if (!durations) return null;
   return planSession({
     totalSeconds: state.minutes * 60,
-    parts: scanOrder(),
+    parts: planParts(),
     style: state.style,
     transition: state.transition,
     durations: durations[state.narrator],
@@ -202,7 +223,7 @@ function renderHint() {
     }
   } else if (plan.reason === 'too-short') {
     hint.classList.add('warn');
-    hint.textContent = `Too short for ${scanOrder().length} body parts. Choose at least ${plan.minMinutes} min, or fewer body parts.`;
+    hint.textContent = `Too short for ${planParts().length} body parts. Choose at least ${plan.minMinutes} min, or fewer body parts.`;
   } else {
     hint.textContent = '';
   }
@@ -214,18 +235,18 @@ function addedOnTop(plan) {
 }
 
 // ---------------------------------------------------------------- body parts
-const modeOf = (limb) => (limb === 'arm' ? state.armMode : state.legMode);
+const modeOf = (limb, node) => state[modeKey(limb, nodeScope(limb, node))];
 const levelOf = (limb) => (limb === 'arm' ? state.handLevel : state.footLevel);
 // Which set a tap on one side means: in "together" either side is the pair.
-const setOf = (limb, side) => (modeOf(limb) === 'together' ? 'B' : side);
+const setOf = (limb, side, node) => (modeOf(limb, node) === 'together' ? 'B' : side);
 
 const diagram = createBodyDiagram($('body-diagram'), {
   coreStatus: (id) => (state.selected.includes(id) ? 'on' : 'off'),
-  limbStatus: (limb, side, node) => nodeStatus(state.selected, limb, setOf(limb, side), node, state),
-  isTogether: (limb) => modeOf(limb) === 'together',
-  label: (limb, side, node) => describe(limb, AREA_BY_KEY[limb][node], setOf(limb, side)).title,
+  limbStatus: (limb, side, node) => nodeStatus(state.selected, limb, setOf(limb, side, node), node, state),
+  isTogether: (limb, node) => modeOf(limb, node) === 'together',
+  label: (limb, side, node) => describe(limb, AREA_BY_KEY[limb][node], setOf(limb, side, node)).title,
   toggleCore: (id) => togglePart(id),
-  toggleLimb: (limb, side, node) => { state.selected = toggleNode(state.selected, limb, setOf(limb, side), node, state); changed(); },
+  toggleLimb: (limb, side, node) => { state.selected = toggleNode(state.selected, limb, setOf(limb, side, node), node, state); changed(); },
 });
 
 function togglePart(id, on = !state.selected.includes(id)) {
@@ -328,18 +349,18 @@ function groupRow(key, title, ids, onToggle, children, { nested = false, default
   return li;
 }
 
-function nodeRows(limb, set) {
+function nodeRows(limb, set, nodes = NODES[limb], flat = false) {
   const level = levelOf(limb);
-  return NODES[limb].map((node) => {
+  return nodes.flatMap((node) => {
     const a = AREA_BY_KEY[limb][node];
     const ids = nodeLeaves(limb, set, node, level);
     const base = describe(limb, a, set);
     const detailNode = node === 'hand' || node === 'foot';
     if (!detailNode || level === 'whole' || level === 'detailed') {
-      if (!partMatches(ids[0])) return null;
-      return checkRow(ids[0], PART_BY_ID[ids[0]].label ?? base.label, nodeStatus(state.selected, limb, set, node, state), () => {
+      if (!partMatches(ids[0])) return [];
+      return [checkRow(ids[0], PART_BY_ID[ids[0]].label ?? base.label, nodeStatus(state.selected, limb, set, node, state), () => {
         state.selected = toggleNode(state.selected, limb, set, node, state); changed();
-      });
+      })];
     }
     // Hands and feet split into parts: the hand becomes a group of palm, back of hand, fingers.
     const leaves = ids.filter(partMatches).map((id) => {
@@ -348,10 +369,29 @@ function nodeRows(limb, set) {
         state.selected = toggleId(state.selected, id); changed();
       });
     });
-    return groupRow(`${limb}${set}:${node}`, base.label, ids,
+    if (flat) return leaves; // already inside a group named for this hand or foot
+    return [groupRow(`${limb}${set}:${node}`, base.label, ids,
       () => { state.selected = toggleNode(state.selected, limb, set, node, state); changed(); },
-      leaves, { nested: true, defaultOpen: true });
+      leaves, { nested: true, defaultOpen: true })];
   });
+}
+
+// What sits under "Arms" or "Legs": the areas for both sides, or a group per side. Hands and feet follow
+// their own setting, so with arms together and hands one at a time you get the areas, then "Left hand", "Right hand".
+function limbChildren(limb) {
+  const nodes = NODES[limb];
+  const detailNode = nodes.at(-1);
+  const limbSets = setsFor(state, limb, 'limb');
+  const detailSets = setsFor(state, limb, 'detail');
+  const runs = limbSets.join() === detailSets.join()
+    ? [{ sets: limbSets, nodes, name: limb }]
+    : [{ sets: limbSets, nodes: nodes.slice(0, -1), name: limb }, { sets: detailSets, nodes: [detailNode], name: limb === 'arm' ? 'hand' : 'foot' }];
+  return runs.flatMap(({ sets, nodes: runNodes, name }) => (sets.length === 1
+    ? nodeRows(limb, 'B', runNodes)
+    : sets.map((set) => groupRow(`${limb}${set}:${name}`, `${set === 'L' ? 'Left' : 'Right'} ${name}`,
+      setIds(limb, set, state),
+      () => { state.selected = toggleSet(state.selected, limb, set, state); changed(); },
+      nodeRows(limb, set, runNodes, runNodes.length === 1), { nested: true }))));
 }
 
 function renderPartTree(focusKey) {
@@ -365,15 +405,8 @@ function renderPartTree(focusKey) {
       ids.filter(partMatches).map((id) => checkRow(id, PART_BY_ID[id].name, state.selected.includes(id) ? 'on' : 'off', () => togglePart(id)))));
   }
   for (const [region, limb] of [['arms', 'arm'], ['legs', 'leg']]) {
-    const sets = setsFor(state, limb);
-    const children = sets.length === 1
-      ? nodeRows(limb, 'B')
-      : sets.map((set) => groupRow(`${limb}${set}`, describe(limb, AREA_BY_KEY[limb][NODES[limb][0]], set).title.replace(/ (shoulder|thigh)$/i, '').replace(/^(\w)/, (c) => c.toUpperCase()) + (limb === 'arm' ? ' arm' : ' leg'),
-        setIds(limb, set, state),
-        () => { state.selected = toggleSet(state.selected, limb, set, state); changed(); },
-        nodeRows(limb, set), { nested: true }));
     rows.push(groupRow(region, REGION_LABEL[region], regionIds(region, state),
-      () => { state.selected = toggleRegion(state.selected, region, state); changed(); }, children));
+      () => { state.selected = toggleRegion(state.selected, region, state); changed(); }, limbChildren(limb)));
   }
   const shown = rows.filter(Boolean);
   tree.replaceChildren(...shown);
@@ -395,27 +428,73 @@ function renderSelectionSummary() {
   $('selection-error').hidden = n > 0;
 }
 
-// --- arms, legs, hands and feet
+// --- arms, legs, hands and feet: each is "together" or "one at a time", on its own
+const UNITS = {
+  arm: { limb: 'arm', scope: 'limb', plural: 'arms', single: 'arm', digit: null },
+  leg: { limb: 'leg', scope: 'limb', plural: 'legs', single: 'leg', digit: null },
+  hand: { limb: 'arm', scope: 'detail', plural: 'hands', single: 'hand', digit: 'finger' },
+  foot: { limb: 'leg', scope: 'detail', plural: 'feet', single: 'foot', digit: 'toe' },
+};
+// The group's heading already says which part ("Hands"), so the options only say how.
 const MODE_OPTIONS = { together: 'Both together', separate: 'One at a time' };
+// From simplest to most detailed. [name, what it does, needs one side at a time]
+const LEVEL_INFO = {
+  hand: {
+    whole: ['Whole hand', 'One step for the whole hand.'],
+    detailed: ['Whole hand in detail', 'Palm, back of the hand, then each finger in turn, each with its own voice line and time.', true],
+    parts: ['Palm, back, fingers', 'Three steps you can switch on or off.'],
+    named: ['Each finger named', 'Palm, back of the hand and all five fingers as separate steps you can pick.', true],
+  },
+  foot: {
+    whole: ['Whole foot', 'One step for the whole foot.'],
+    detailed: ['Whole foot in detail', 'Heel, sole, top of the foot, then each toe in turn, each with its own voice line and time.', true],
+    parts: ['Heel, sole, top, toes', 'Four steps you can switch on or off.'],
+    named: ['Each toe named', 'Heel, sole, top of the foot and all five toes as separate steps you can pick.', true],
+  },
+};
+
+// Radio rows with a title, a one-line description and a tag for options that need one side at a time.
+function renderLevelRows(container, name, info, value, onChange) {
+  container.replaceChildren(...Object.entries(info).map(([val, [title, text, sides]]) => {
+    const label = document.createElement('label');
+    label.className = 'choice';
+    label.innerHTML = '<input type="radio"><span class="choice-text"><strong></strong><small></small></span>';
+    const input = label.querySelector('input');
+    input.name = name;
+    input.value = val;
+    input.checked = val === value;
+    input.addEventListener('change', () => onChange(val));
+    label.querySelector('strong').textContent = title;
+    label.querySelector('small').textContent = text;
+    if (sides) {
+      const tag = document.createElement('span');
+      tag.className = 'choice-tag';
+      tag.textContent = 'One side at a time';
+      label.querySelector('.choice-text').append(tag);
+    }
+    return label;
+  }));
+}
 const FIRST_OPTIONS = { L: 'Left first', R: 'Right first' };
 const HAND_OPTIONS = { whole: 'Whole hand', detailed: 'Whole hand in detail', parts: 'Palm, back, fingers', named: 'Each finger named' };
 const FOOT_OPTIONS = { whole: 'Whole foot', detailed: 'Whole foot in detail', parts: 'Heel, sole, top, toes', named: 'Each toe named' };
+const needsSides = (level) => level === 'named' || level === 'detailed';
 
 function say(text) { $('detail-status').textContent = text; }
 
-function setMode(limb, mode) {
-  const key = limb === 'arm' ? 'armMode' : 'legMode';
-  const lvlKey = limb === 'arm' ? 'handLevel' : 'footLevel';
+function setMode(unit, mode) {
+  const u = UNITS[unit];
+  const key = modeKey(u.limb, u.scope);
   if (state[key] === mode) return;
-  state.selected = changeMode(state.selected, limb, state[key], mode);
+  state.selected = changeMode(state.selected, u.limb, u.scope, state[key], mode);
   state[key] = mode;
-  const plural = limb === 'arm' ? 'arms' : 'legs';
-  if (mode === 'together' && state[lvlKey] === 'named') {
-    state.selected = changeLevel(state.selected, limb, 'named', 'parts');
+  const lvlKey = u.limb === 'arm' ? 'handLevel' : 'footLevel';
+  if (u.scope === 'detail' && mode === 'together' && needsSides(state[lvlKey])) {
+    state.selected = changeLevel(state.selected, u.limb, state[lvlKey], 'parts');
     state[lvlKey] = 'parts';
-    say(`Both ${plural} together can't name single ${limb === 'arm' ? 'fingers' : 'toes'}, so they are scanned as a group.`);
+    say(`Both ${u.plural} together can't walk through single ${u.digit}s, so they are scanned in parts.`);
   } else {
-    say(mode === 'together' ? `Both ${plural} are scanned in the same step.` : `Each ${limb} is scanned on its own, one after the other.`);
+    say(mode === 'together' ? `Both ${u.plural} are scanned in the same step.` : `Each ${u.single} is scanned on its own, one after the other.`);
   }
   changed();
 }
@@ -423,29 +502,36 @@ function setMode(limb, mode) {
 function setLevel(limb, level) {
   const key = limb === 'arm' ? 'handLevel' : 'footLevel';
   if (state[key] === level) return;
-  const plural = limb === 'arm' ? 'arms' : 'legs';
+  const u = UNITS[limb === 'arm' ? 'hand' : 'foot'];
+  const mKey = modeKey(limb, 'detail');
   let message = '';
-  if (level === 'named' && modeOf(limb) === 'together') {
-    state.selected = changeMode(state.selected, limb, 'together', 'separate');
-    state[limb === 'arm' ? 'armMode' : 'legMode'] = 'separate';
-    message = `The ${plural} are now scanned one at a time so each ${limb === 'arm' ? 'finger' : 'toe'} can be named. `;
+  if (needsSides(level) && state[mKey] === 'together') {
+    state.selected = changeMode(state.selected, limb, 'detail', 'together', 'separate');
+    state[mKey] = 'separate';
+    message = `The ${u.plural} are now scanned one at a time so each ${u.digit} can have its own turn. `;
   }
   state.selected = changeLevel(state.selected, limb, state[key], level);
   state[key] = level;
-  say(message + (limb === 'arm' ? 'Hands' : 'Feet') + ': ' + (limb === 'arm' ? HAND_OPTIONS : FOOT_OPTIONS)[level] + '.');
+  const opts = limb === 'arm' ? HAND_OPTIONS : FOOT_OPTIONS;
+  const extra = level === 'detailed' ? ` Each part gets its own share of the time (${u.digit === 'finger' ? 'palm, back of hand and every finger' : 'heel, sole, top and every toe'}).` : '';
+  say(`${message}${u.plural[0].toUpperCase()}${u.plural.slice(1)}: ${opts[level]}.${extra}`);
   changed();
 }
 
 function renderDetail() {
-  renderRadios($('arm-mode'), 'armMode', MODE_OPTIONS, state.armMode, (v) => setMode('arm', v));
-  renderRadios($('leg-mode'), 'legMode', MODE_OPTIONS, state.legMode, (v) => setMode('leg', v));
+  for (const [unit, id, name] of [['arm', 'arm-mode', 'armMode'], ['leg', 'leg-mode', 'legMode'], ['hand', 'hand-mode', 'handMode'], ['foot', 'foot-mode', 'footMode']]) {
+    renderRadios($(id), name, MODE_OPTIONS, state[name], (v) => setMode(unit, v));
+  }
   renderRadios($('first-side'), 'firstSide', FIRST_OPTIONS, state.firstSide, (v) => { state.firstSide = v; changed(); });
-  $('side-fieldset').hidden = (state.armMode === 'together' && state.legMode === 'together') || state.direction === 'custom';
-  renderRadios($('hand-level'), 'handLevel', HAND_OPTIONS, state.handLevel, (v) => setLevel('arm', v));
-  renderRadios($('foot-level'), 'footLevel', FOOT_OPTIONS, state.footLevel, (v) => setLevel('leg', v));
-  const sep = [state.armMode === 'separate' && 'arms', state.legMode === 'separate' && 'legs'].filter(Boolean).join(' and ');
-  $('diagram-side-note').textContent = sep
-    ? `Your ${sep} are scanned one at a time. Tap the left or right side separately. The front view shows your left on the right.`
+  const anySeparate = ['armMode', 'legMode', 'handMode', 'footMode'].some((k) => state[k] === 'separate');
+  $('side-fieldset').hidden = !anySeparate || state.direction === 'custom';
+  renderLevelRows($('hand-level'), 'handLevel', LEVEL_INFO.hand, state.handLevel, (v) => setLevel('arm', v));
+  renderLevelRows($('foot-level'), 'footLevel', LEVEL_INFO.foot, state.footLevel, (v) => setLevel('leg', v));
+  const sep = [['armMode', 'arms'], ['legMode', 'legs'], ['handMode', 'hands'], ['footMode', 'feet']]
+    .filter(([k]) => state[k] === 'separate').map(([, w]) => w);
+  const list = sep.length > 1 ? `${sep.slice(0, -1).join(', ')} and ${sep.at(-1)}` : sep[0];
+  $('diagram-side-note').textContent = sep.length
+    ? `Your ${list} are scanned one at a time. Tap the left or right side separately. The front view shows your left on the right.`
     : '';
 }
 
@@ -643,7 +729,7 @@ for (const key of ['voice', 'sound']) {
 // ---------------------------------------------------------------- profiles
 // A profile is a saved session setup. Appearance, recent sessions and the other profiles are not part of it.
 const PROFILE_FIELDS = [
-  'minutes', 'selected', 'direction', 'armMode', 'legMode', 'handLevel', 'footLevel', 'firstSide',
+  'minutes', 'selected', 'direction', 'armMode', 'legMode', 'handMode', 'footMode', 'handLevel', 'footLevel', 'firstSide',
   'style', 'narrator', 'voiceVolume', 'voiceMuted', 'soundVolume', 'soundMuted', 'ambience', 'transition',
   'countIntro', 'countOutro',
 ];
@@ -656,14 +742,14 @@ function profileSnapshot() {
 }
 // Does the current setup still match what the profile saved?
 function profileMatches(p) {
-  const loaded = { ...structuredClone(DEFAULTS), ...structuredClone(p.data) };
+  const loaded = fromSaved(p.data);
   normalize(loaded);
   const key = (s, order) => JSON.stringify([...PROFILE_FIELDS.filter((k) => k !== 'selected').map((k) => s[k]),
     s.selected.slice().sort(), s.direction === 'custom' ? order : null]);
   return key(loaded, loaded.order.filter((id) => loaded.selected.includes(id))) === key(state, scanOrder());
 }
 function profileSummary(p) {
-  const d = { ...structuredClone(DEFAULTS), ...structuredClone(p.data) };
+  const d = fromSaved(p.data);
   normalize(d);
   const n = d.selected.length;
   return `${d.minutes} min · ${n} body part${n === 1 ? '' : 's'} · ${NARRATORS.find((x) => x.id === d.narrator).name} · ${STYLES[d.style].name}`;
@@ -698,7 +784,7 @@ function renderProfiles(focusKey) {
 }
 
 function applyProfile(p) {
-  const loaded = { ...structuredClone(DEFAULTS), ...structuredClone(p.data) };
+  const loaded = fromSaved(p.data);
   normalize(loaded);
   for (const k of PROFILE_FIELDS) state[k] = loaded[k];
   state.order = loaded.order;
@@ -819,15 +905,15 @@ function openReview() {
     return;
   }
   const plan = currentPlan();
-  const parts = scanOrder();
+  const parts = planParts();
   const rows = [
     ['Length', fmtDuration(state.minutes * 60)],
     ['Body parts', `${parts.length}`],
   ];
   const profile = state.profiles.find((p) => p.id === state.activeProfile);
   if (profile) rows.push(['Profile', profileMatches(profile) ? profile.name : `${profile.name} (changed)`]);
-  const separate = [state.armMode === 'separate' && 'arms', state.legMode === 'separate' && 'legs'].filter(Boolean);
-  if (separate.length) rows.push([`${separate.join(' and ')[0].toUpperCase()}${separate.join(' and ').slice(1)}`, `One at a time, ${state.firstSide === 'L' ? 'left' : 'right'} first`]);
+  const separate = [['armMode', 'arms'], ['legMode', 'legs'], ['handMode', 'hands'], ['footMode', 'feet']].filter(([k]) => state[k] === 'separate').map(([, w]) => w);
+  if (separate.length) rows.push(['One at a time', `${separate.join(', ')}${state.direction === 'custom' ? '' : `, ${state.firstSide === 'L' ? 'left' : 'right'} first`}`]);
   if (plan?.ok) {
     const { min, max } = plan.perPart;
     rows.push(['Each body part', min === max ? fmtDuration(min) : `${fmtDuration(min)} – ${fmtDuration(max)}`]);
@@ -873,9 +959,13 @@ $('begin-btn').addEventListener('click', async (e) => {
     await engine.loadClips(state.narrator, ids, (done, total) => {
       $('loading-text').textContent = `Preparing audio… ${done} of ${total}`;
     });
-  } catch {
-    $('loading-text').textContent = 'Some audio could not be loaded. Check your connection and try again.';
+  } catch (err) {
+    const n = err?.failed?.length;
+    const first = err?.failed?.[0]?.id;
+    $('loading-text').textContent = `${n ? `${nf.format(n)} voice clip${n === 1 ? '' : 's'} could not be loaded${first ? ` (for example ${first})` : ''}. ` : 'Some audio could not be loaded. '}Check your connection and try again. If the app was just updated, close it completely and open it again once while online so the new voices download.`;
     $('begin-btn').disabled = false;
+    // An out-of-date copy of the app can ask for clips that no longer exist: fetch the newest copy for the next start.
+    navigator.serviceWorker?.getRegistration().then((reg) => reg?.update()).catch(() => {});
     return;
   }
   rememberRecent();
