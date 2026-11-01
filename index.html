@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Body Scan</title>
   <meta name="description" content="A calm, guided body scan meditation.">
@@ -14,13 +15,7 @@
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/styles.css">
-  <script>
-    // Apply the saved theme before first paint to avoid a flash.
-    try {
-      const t = JSON.parse(localStorage.getItem('bodyscan.v1') || '{}').theme;
-      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-    } catch (e) { /* storage unavailable */ }
-  </script>
+  <script src="js/theme.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#setup-main">Skip to session setup</a>
@@ -37,6 +32,18 @@
     <main id="setup-main" class="content">
       <p class="lede">Settle in. Choose how long, where to rest your attention, and who guides you. You can pause or stop at any time.</p>
       <p class="offline-banner" id="offline-banner" role="status" hidden></p>
+
+      <section class="card" aria-labelledby="profiles-h">
+        <h2 id="profiles-h">Bodyscan profiles</h2>
+        <p class="hint tight">Save a favorite setup (length, body parts and their order, guidance, narrator and sounds) and bring it back with one tap.</p>
+        <ul class="profile-list" id="profile-list" aria-label="Saved profiles"></ul>
+        <div class="profile-save">
+          <label class="visually-hidden" for="profile-name">Profile name</label>
+          <input type="text" id="profile-name" class="text-input" maxlength="40" placeholder="Evening unwind" autocomplete="off">
+          <button class="btn" id="profile-save" type="button">Save current setup</button>
+        </div>
+        <p class="hint" id="profile-status" role="status" aria-live="polite"></p>
+      </section>
 
       <section class="card" id="recent-card" hidden aria-labelledby="recent-h">
         <h2 id="recent-h">Recent</h2>
@@ -63,9 +70,17 @@
           </div>
         </div>
 
+        <p class="hint tight" id="parts-help">Pick a region to start, then tap the diagram or open the list to fine-tune.</p>
+        <div class="region-row" id="region-chips" role="group" aria-label="Regions"></div>
+
         <div id="panel-diagram" role="tabpanel" aria-labelledby="tab-diagram">
           <div id="body-diagram" class="body-diagram"></div>
-          <p class="legend"><span class="legend-swatch on" aria-hidden="true"></span> Striped with a check = included <span class="legend-swatch" aria-hidden="true"></span> Plain = left out</p>
+          <p class="legend">
+            <span class="legend-swatch on" aria-hidden="true"></span> Striped with a check = included
+            <span class="legend-swatch part" aria-hidden="true"></span> Dashed = some included
+            <span class="legend-swatch" aria-hidden="true"></span> Plain = left out
+          </p>
+          <p class="hint center-text" id="diagram-side-note"></p>
         </div>
 
         <div id="panel-list" role="tabpanel" aria-labelledby="tab-list" hidden>
@@ -74,16 +89,42 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
             <input type="search" id="part-filter" placeholder="Filter body parts" autocomplete="off">
           </label>
-          <ul class="part-list" id="part-list" aria-label="Body parts"></ul>
-          <p class="hint" id="filter-empty" hidden>No body parts match your filter.</p>
+          <ul class="part-tree" id="part-tree" aria-label="Body parts"></ul>
+          <p class="hint" id="filter-empty" hidden>No body parts match your filter. For single fingers and toes, choose "Each finger named" or "Each toe named" under Arms, legs, hands and feet.</p>
         </div>
 
-        <div class="row gap">
+        <div class="row gap top">
           <button class="btn ghost" id="select-all">Select all</button>
           <button class="btn ghost" id="select-none">Clear</button>
         </div>
         <p class="selection-summary" id="selection-summary" aria-live="polite"></p>
         <p class="error" id="selection-error" role="alert" hidden>Choose at least one body part to begin.</p>
+      </section>
+
+      <section class="card" aria-labelledby="detail-h">
+        <h2 id="detail-h">Arms, legs, hands and feet</h2>
+        <p class="hint tight">Left and right mean your own left and right. When a limb is scanned on its own, the narrator introduces it ("Now, your left arm only") so you only need to attend to one side at a time.</p>
+        <fieldset>
+          <legend>Arms</legend>
+          <div class="chip-row" id="arm-mode"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Legs</legend>
+          <div class="chip-row" id="leg-mode"></div>
+        </fieldset>
+        <fieldset id="side-fieldset">
+          <legend>Start with</legend>
+          <div class="chip-row" id="first-side"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Hands</legend>
+          <div class="chip-row" id="hand-level"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Feet</legend>
+          <div class="chip-row" id="foot-level"></div>
+        </fieldset>
+        <p class="hint" id="detail-status" aria-live="polite"></p>
       </section>
 
       <section class="card" aria-labelledby="order-h">
@@ -245,7 +286,7 @@
       <p class="hint" id="offline-detail">Offline check: waiting for the offline helper…</p>
 
       <h3>Saved preferences</h3>
-      <p class="hint">Your last choices and recent sessions are kept on this device only.</p>
+      <p class="hint">Your last choices, recent sessions and saved profiles are kept on this device only. Forgetting your choices keeps your profiles.</p>
       <div class="row gap top">
         <button class="btn" type="button" id="forget-prefs">Forget my choices</button>
       </div>

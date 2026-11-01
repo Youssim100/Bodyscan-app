@@ -205,15 +205,61 @@ legend { font-weight: 600; font-size: 0.95rem; margin-bottom: 8px; padding: 0; }
   border: 2px solid var(--accent-strong); margin-left: 0;
 }
 
-/* ---------- Part list ---------- */
+.region.partial .shape { fill: var(--accent-soft); stroke: var(--accent-strong); stroke-width: 2.2; stroke-dasharray: 4 3; }
+.region.partial .badge { display: block; }
+.badge .dash { display: none; }
+.region.partial .badge .tick { display: none; }
+.region.partial .badge .dash { display: block; }
+.legend-swatch.part { background: var(--accent-soft); border: 2px dashed var(--accent-strong); }
+.hint.tight { margin: -4px 0 12px; }
+.center-text { text-align: center; }
+
+/* ---------- Profiles ---------- */
+.profile-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+.profile-list:empty { display: none; }
+.profile-item { display: flex; align-items: center; gap: 6px; border: 1.5px solid var(--line); border-radius: 14px; padding: 4px 6px 4px 4px; }
+.profile-item[data-active="true"] { border: 2px solid var(--accent-strong); background: var(--accent-soft); }
+.profile-use { flex: 1; min-width: 0; display: grid; gap: 1px; text-align: left; padding: 8px 10px; border: 0; background: transparent; cursor: pointer; border-radius: 10px; }
+.profile-use strong { overflow-wrap: anywhere; }
+.profile-use small { color: var(--muted); font-size: 0.85rem; }
+.profile-tag { font-weight: 600; font-size: 0.8rem; color: var(--accent-strong); }
+.profile-save { display: flex; gap: 8px; }
+.text-input { flex: 1; min-width: 0; min-height: 44px; padding: 0 12px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface-2); font-size: 16px; }
+.text-input:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- Region chips (Head and neck / Torso / Arms / Legs) ---------- */
+.region-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.region-chip {
+  min-height: 48px; padding: 0 12px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--surface);
+  font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+.region-chip::before { content: ""; width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--muted); flex: none; display: grid; place-items: center; font-size: 0.8rem; line-height: 1; }
+.region-chip[data-state="on"] { background: var(--accent-soft); border: 2px solid var(--accent-strong); }
+.region-chip[data-state="on"]::before { content: "✓"; background: var(--accent-strong); border-color: var(--accent-strong); color: var(--surface); }
+.region-chip[data-state="partial"] { background: var(--accent-soft); border: 2px dashed var(--accent-strong); }
+.region-chip[data-state="partial"]::before { content: "–"; border-color: var(--accent-strong); color: var(--accent-strong); font-weight: 700; }
+
+/* ---------- Part tree (list view) ---------- */
+.part-tree, .tree-children { list-style: none; margin: 0; padding: 0; }
+.part-tree { margin-top: 10px; }
+.part-tree > li + li { border-top: 1px solid var(--line); }
+.tree-head { display: flex; align-items: center; gap: 8px; min-height: 52px; }
+.tree-head label { flex: 1; display: flex; align-items: center; gap: 12px; min-height: 48px; font-weight: 600; cursor: pointer; }
+.tree-group.nested > .tree-head label { font-weight: 500; }
+.tree-count { color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tree-toggle { width: 44px; height: 44px; border: 0; background: transparent; border-radius: 50%; cursor: pointer; display: grid; place-items: center; flex: none; }
+.tree-toggle svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.15s; }
+.tree-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.tree-children { padding-left: 14px; border-left: 2px solid var(--accent-soft); margin-left: 10px; }
+.tree-children > li + li { border-top: 1px solid var(--line); }
+.tree-children label { display: flex; align-items: center; gap: 12px; min-height: 48px; cursor: pointer; }
+.tree-head input[type="checkbox"], .tree-children input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent-strong); flex: none; margin: 0; }
+
+/* ---------- Search ---------- */
 .search { display: flex; align-items: center; gap: 8px; border: 1.5px solid var(--line); border-radius: 12px; padding: 0 12px; background: var(--surface-2); }
 .search svg { width: 18px; height: 18px; fill: none; stroke: var(--muted); stroke-width: 2; flex: none; }
 .search input { flex: 1; min-height: 44px; border: 0; background: transparent; outline: none; font-size: 16px; }
 .search:focus-within { outline: 3px solid var(--accent); outline-offset: 1px; }
-.part-list { list-style: none; margin: 10px 0 0; padding: 0; }
-.part-list li + li { border-top: 1px solid var(--line); }
-.part-list label { display: flex; align-items: center; gap: 12px; min-height: 48px; cursor: pointer; }
-.part-list input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent-strong); flex: none; margin: 0; }
 .selection-summary { font-weight: 600; margin: 12px 0 0; }
 
 /* ---------- Order ---------- */

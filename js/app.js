@@ -1,6 +1,11 @@
 import {
-  BODY_PARTS, PART_BY_ID, DEFAULT_ORDER, NARRATORS, STYLES, AMBIENCES, TRANSITIONS,
+  PART_BY_ID, AREA_BY_KEY, REGION_LABEL, NARRATORS, STYLES, AMBIENCES, TRANSITIONS, describe,
 } from './content.js';
+import {
+  DEFAULT_CONFIG, LEVELS, NODES, REGIONS, setsFor, nodeLeaves, nodeStatus, status, toggleNode, toggleId, toggleSet, setIds,
+  regionIds, regionStatus, toggleRegion, wholeBody, changeMode, changeLevel, inferConfig,
+  canonicalOrder, mergeOrder, migrateSelected, migrateDirection,
+} from './selection.js';
 import { planSession } from './timing.js';
 import { AudioEngine } from './audio.js';
 import { Session } from './session.js';
@@ -11,11 +16,15 @@ const STORE_KEY = 'bodyscan.v1';
 const PRESETS = [5, 10, 15, 20, 30, 45];
 const MIN_MINUTES = 1;
 const MAX_MINUTES = 90;
+const MAX_PROFILES = 12;
 
 const DEFAULTS = {
+  schema: 2,
   minutes: 10,
-  selected: [...DEFAULT_ORDER],
-  order: [...DEFAULT_ORDER],
+  ...DEFAULT_CONFIG,           // armMode, legMode, handLevel, footLevel, firstSide
+  selected: wholeBody(DEFAULT_CONFIG),
+  direction: 'down',           // 'down' head to toe, 'up' toe to head, 'custom' uses `order`
+  order: canonicalOrder('down', DEFAULT_CONFIG),
   style: 'guided',
   narrator: 'ava',
   voiceVolume: 0.9,
@@ -29,25 +38,64 @@ const DEFAULTS = {
   countOutro: true,
   partsView: 'diagram',
   recent: [],
+  profiles: [],            // saved favourites: { id, name, data }
+  activeProfile: null,       // id of the profile last loaded or saved
 };
 
 // ---------------------------------------------------------------- state
 function load() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
-    const s = { ...DEFAULTS, ...saved };
-    // Guard against stale or edited data
-    s.order = [...s.order.filter((id) => PART_BY_ID[id]), ...DEFAULT_ORDER.filter((id) => !s.order.includes(id))];
-    s.selected = s.selected.filter((id) => PART_BY_ID[id]);
-    if (!NARRATORS.some((n) => n.id === s.narrator)) s.narrator = DEFAULTS.narrator;
-    if (!STYLES[s.style]) s.style = DEFAULTS.style;
-    if (!AMBIENCES[s.ambience]) s.ambience = DEFAULTS.ambience;
-    if (!TRANSITIONS[s.transition]) s.transition = DEFAULTS.transition;
-    s.minutes = clampMinutes(s.minutes);
-    return s;
+    const s = { ...structuredClone(DEFAULTS), ...saved };
+    // Version 1 saved fewer, coarser parts and a full order list; translate them.
+    if (saved.schema !== 2 && Array.isArray(saved.selected)) {
+      s.selected = migrateSelected(saved.selected);
+      s.direction = migrateDirection(saved.order);
+      s.order = Array.isArray(saved.order) ? saved.order : [];
+      Object.assign(s, inferConfig(s.selected, DEFAULT_CONFIG));
+    }
+    return normalize(s, saved.schema !== 2);
   } catch {
     return structuredClone(DEFAULTS);
   }
+}
+
+// Guard against stale, edited or damaged data (also used for saved profiles).
+function normalize(s, migrate = false) {
+  s.schema = 2;
+  s.selected = [...new Set((Array.isArray(s.selected) ? s.selected : []).filter((id) => PART_BY_ID[id]))];
+  if (!['together', 'separate'].includes(s.armMode)) s.armMode = DEFAULT_CONFIG.armMode;
+  if (!['together', 'separate'].includes(s.legMode)) s.legMode = DEFAULT_CONFIG.legMode;
+  if (!LEVELS.includes(s.handLevel)) s.handLevel = DEFAULT_CONFIG.handLevel;
+  if (!LEVELS.includes(s.footLevel)) s.footLevel = DEFAULT_CONFIG.footLevel;
+  if (!['L', 'R'].includes(s.firstSide)) s.firstSide = DEFAULT_CONFIG.firstSide;
+  if (!['down', 'up', 'custom'].includes(s.direction)) s.direction = 'down';
+  // Choices that only make sense together (e.g. named fingers need one arm at a time); drop limb ids the UI can't show.
+  Object.assign(s, inferConfig([], s));
+  if (s.armMode === 'together' && s.handLevel === 'named') s.handLevel = 'parts';
+  if (s.legMode === 'together' && s.footLevel === 'named') s.footLevel = 'parts';
+  s.selected = s.selected.filter((id) => {
+    const p = PART_BY_ID[id];
+    return !p?.limb || setsFor(s, p.limb).includes(p.set);
+  });
+  s.order = mergeOrder(Array.isArray(s.order) ? s.order : [], canonicalOrder('down', s));
+  if (!['system', 'light', 'dark'].includes(s.theme)) s.theme = DEFAULTS.theme;
+  for (const k of ['voiceVolume', 'soundVolume']) s[k] = Number.isFinite(s[k]) ? Math.min(1, Math.max(0, s[k])) : DEFAULTS[k];
+  s.recent = (Array.isArray(s.recent) ? s.recent : [])
+    .filter((r) => r && Array.isArray(r.parts) && Number.isFinite(r.minutes))
+    .map((r) => ({ ...r, parts: migrate ? migrateSelected(r.parts) : r.parts.filter((id) => PART_BY_ID[id]) }))
+    .filter((r) => r.parts.length)
+    .slice(0, 3);
+  s.profiles = (Array.isArray(s.profiles) ? s.profiles : [])
+    .filter((p) => p && typeof p.id === 'string' && /^[a-z0-9]{1,24}$/.test(p.id) && typeof p.name === 'string' && p.name.trim() && p.data && typeof p.data === 'object')
+    .slice(0, MAX_PROFILES);
+  if (!s.profiles.some((p) => p.id === s.activeProfile)) s.activeProfile = null;
+  if (!NARRATORS.some((n) => n.id === s.narrator)) s.narrator = DEFAULTS.narrator;
+  if (!STYLES[s.style]) s.style = DEFAULTS.style;
+  if (!AMBIENCES[s.ambience]) s.ambience = DEFAULTS.ambience;
+  if (!TRANSITIONS[s.transition]) s.transition = DEFAULTS.transition;
+  s.minutes = clampMinutes(s.minutes);
+  return s;
 }
 
 function save() {
@@ -61,7 +109,13 @@ let session = null;
 let wakeLock = null;
 
 function clampMinutes(m) { return Math.min(MAX_MINUTES, Math.max(MIN_MINUTES, Math.round(Number(m) || 10))); }
-const scanOrder = () => state.order.filter((id) => state.selected.includes(id));
+// Every part in the current order, selected or not. Head to toe and toe to head are computed;
+// a custom order (after moving a part) is kept as saved.
+function fullOrder() {
+  const canonical = canonicalOrder(state.direction === 'up' ? 'up' : 'down', state);
+  return state.direction === 'custom' ? mergeOrder(state.order, canonical) : canonical;
+}
+const scanOrder = () => fullOrder().filter((id) => state.selected.includes(id));
 
 function currentPlan() {
   if (!durations) return null;
@@ -160,55 +214,239 @@ function addedOnTop(plan) {
 }
 
 // ---------------------------------------------------------------- body parts
+const modeOf = (limb) => (limb === 'arm' ? state.armMode : state.legMode);
+const levelOf = (limb) => (limb === 'arm' ? state.handLevel : state.footLevel);
+// Which set a tap on one side means: in "together" either side is the pair.
+const setOf = (limb, side) => (modeOf(limb) === 'together' ? 'B' : side);
+
 const diagram = createBodyDiagram($('body-diagram'), {
-  isSelected: (id) => state.selected.includes(id),
-  toggle: (id) => togglePart(id),
+  coreStatus: (id) => (state.selected.includes(id) ? 'on' : 'off'),
+  limbStatus: (limb, side, node) => nodeStatus(state.selected, limb, setOf(limb, side), node, state),
+  isTogether: (limb) => modeOf(limb) === 'together',
+  label: (limb, side, node) => describe(limb, AREA_BY_KEY[limb][node], setOf(limb, side)).title,
+  toggleCore: (id) => togglePart(id),
+  toggleLimb: (limb, side, node) => { state.selected = toggleNode(state.selected, limb, setOf(limb, side), node, state); changed(); },
 });
 
 function togglePart(id, on = !state.selected.includes(id)) {
-  state.selected = on ? [...state.selected, id] : state.selected.filter((x) => x !== id);
+  state.selected = on ? [...state.selected.filter((x) => x !== id), id] : state.selected.filter((x) => x !== id);
   changed();
 }
 
-function renderPartList() {
-  const list = $('part-list');
-  if (!list.childElementCount) {
-    for (const p of BODY_PARTS) {
-      const li = document.createElement('li');
-      li.dataset.part = p.id;
-      li.dataset.search = `${p.name} ${p.keywords}`.toLowerCase();
-      const label = document.createElement('label');
-      const input = document.createElement('input');
-      input.type = 'checkbox';
-      input.addEventListener('change', () => togglePart(p.id, input.checked));
-      const name = document.createElement('span');
-      name.textContent = p.name;
-      label.append(input, name);
-      li.append(label);
-      list.append(li);
+// --- region chips: Head and neck / Torso / Arms / Legs, the quickest way to start
+function renderRegions() {
+  const box = $('region-chips');
+  if (!box.childElementCount) {
+    for (const region of REGIONS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'region-chip';
+      b.dataset.region = region;
+      b.addEventListener('click', () => { state.selected = toggleRegion(state.selected, region, state); changed(); });
+      box.append(b);
     }
   }
-  for (const li of list.children) li.querySelector('input').checked = state.selected.includes(li.dataset.part);
+  for (const b of box.children) {
+    const region = b.dataset.region;
+    const st = regionStatus(state.selected, region, state);
+    b.textContent = REGION_LABEL[region];
+    b.dataset.state = st;
+    b.setAttribute('aria-pressed', st === 'on' ? 'true' : st === 'partial' ? 'mixed' : 'false');
+  }
+}
+
+// --- list: head, torso, arms and legs as groups you can open
+const openGroups = new Set(); // everything starts closed: each group's checkbox and count already give the overview
+let filterText = '';
+
+function partMatches(id) {
+  if (!filterText) return true;
+  const p = PART_BY_ID[id];
+  return `${p.name} ${p.keywords}`.toLowerCase().includes(filterText);
+}
+
+function checkRow(key, label, st, onChange) {
+  const li = document.createElement('li');
+  const row = document.createElement('label');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = st === 'on';
+  input.indeterminate = st === 'partial';
+  input.dataset.key = key;
+  input.addEventListener('change', onChange);
+  const name = document.createElement('span');
+  name.textContent = label;
+  row.append(input, name);
+  li.append(row);
+  return li;
+}
+
+// A group has its own checkbox (all / some / none), a count, and a button that opens it.
+const seenGroups = new Set();
+function groupRow(key, title, ids, onToggle, children, { nested = false, defaultOpen = false } = {}) {
+  const items = children.filter(Boolean);
+  if (!items.length) return null;
+  if (defaultOpen && !seenGroups.has(key)) { seenGroups.add(key); openGroups.add(key); }
+  const li = document.createElement('li');
+  li.className = `tree-group${nested ? ' nested' : ''}`;
+  const head = document.createElement('div');
+  head.className = 'tree-head';
+  const st = status(state.selected, ids);
+  const n = ids.filter((id) => state.selected.includes(id)).length;
+  const label = document.createElement('label');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = st === 'on';
+  input.indeterminate = st === 'partial';
+  input.dataset.key = `${key}:all`;
+  input.addEventListener('change', onToggle);
+  const name = document.createElement('span');
+  name.textContent = title;
+  label.append(input, name);
+  const count = document.createElement('span');
+  count.className = 'tree-count';
+  count.textContent = `${n} of ${ids.length}`;
+  const open = !!filterText || openGroups.has(key);
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'tree-toggle';
+  toggle.dataset.key = `${key}:open`;
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.setAttribute('aria-label', `${title} details`);
+  toggle.disabled = !!filterText; // while filtering, matching groups stay open
+  toggle.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+  toggle.addEventListener('click', () => {
+    if (openGroups.has(key)) openGroups.delete(key); else openGroups.add(key);
+    renderPartTree(`${key}:open`);
+  });
+  head.append(label, count, toggle);
+  const ul = document.createElement('ul');
+  ul.className = 'tree-children';
+  ul.hidden = !open;
+  ul.append(...items);
+  li.append(head, ul);
+  return li;
+}
+
+function nodeRows(limb, set) {
+  const level = levelOf(limb);
+  return NODES[limb].map((node) => {
+    const a = AREA_BY_KEY[limb][node];
+    const ids = nodeLeaves(limb, set, node, level);
+    const base = describe(limb, a, set);
+    const detailNode = node === 'hand' || node === 'foot';
+    if (!detailNode || level === 'whole' || level === 'detailed') {
+      if (!partMatches(ids[0])) return null;
+      return checkRow(ids[0], PART_BY_ID[ids[0]].label ?? base.label, nodeStatus(state.selected, limb, set, node, state), () => {
+        state.selected = toggleNode(state.selected, limb, set, node, state); changed();
+      });
+    }
+    // Hands and feet split into parts: the hand becomes a group of palm, back of hand, fingers.
+    const leaves = ids.filter(partMatches).map((id) => {
+      const p = PART_BY_ID[id];
+      return checkRow(id, describe(limb, AREA_BY_KEY[limb][p.key], set).label, state.selected.includes(id) ? 'on' : 'off', () => {
+        state.selected = toggleId(state.selected, id); changed();
+      });
+    });
+    return groupRow(`${limb}${set}:${node}`, base.label, ids,
+      () => { state.selected = toggleNode(state.selected, limb, set, node, state); changed(); },
+      leaves, { nested: true, defaultOpen: true });
+  });
+}
+
+function renderPartTree(focusKey) {
+  const tree = $('part-tree');
+  const wanted = focusKey ?? (tree.contains(document.activeElement) ? document.activeElement.dataset.key : null);
+  const rows = [];
+  for (const region of ['head', 'torso']) {
+    const ids = regionIds(region, state);
+    rows.push(groupRow(region, REGION_LABEL[region], ids,
+      () => { state.selected = toggleRegion(state.selected, region, state); changed(); },
+      ids.filter(partMatches).map((id) => checkRow(id, PART_BY_ID[id].name, state.selected.includes(id) ? 'on' : 'off', () => togglePart(id)))));
+  }
+  for (const [region, limb] of [['arms', 'arm'], ['legs', 'leg']]) {
+    const sets = setsFor(state, limb);
+    const children = sets.length === 1
+      ? nodeRows(limb, 'B')
+      : sets.map((set) => groupRow(`${limb}${set}`, describe(limb, AREA_BY_KEY[limb][NODES[limb][0]], set).title.replace(/ (shoulder|thigh)$/i, '').replace(/^(\w)/, (c) => c.toUpperCase()) + (limb === 'arm' ? ' arm' : ' leg'),
+        setIds(limb, set, state),
+        () => { state.selected = toggleSet(state.selected, limb, set, state); changed(); },
+        nodeRows(limb, set), { nested: true }));
+    rows.push(groupRow(region, REGION_LABEL[region], regionIds(region, state),
+      () => { state.selected = toggleRegion(state.selected, region, state); changed(); }, children));
+  }
+  const shown = rows.filter(Boolean);
+  tree.replaceChildren(...shown);
+  $('filter-empty').hidden = shown.length > 0;
+  if (wanted) tree.querySelector(`[data-key="${CSS.escape(wanted)}"]`)?.focus();
 }
 
 $('part-filter').addEventListener('input', (e) => {
-  const q = e.target.value.trim().toLowerCase();
-  let shown = 0;
-  for (const li of $('part-list').children) {
-    const match = !q || li.dataset.search.includes(q);
-    li.hidden = !match;
-    shown += match;
-  }
-  $('filter-empty').hidden = shown > 0;
+  filterText = e.target.value.trim().toLowerCase();
+  renderPartTree();
 });
 
-$('select-all').addEventListener('click', () => { state.selected = [...DEFAULT_ORDER]; changed(); });
+$('select-all').addEventListener('click', () => { state.selected = wholeBody(state); changed(); });
 $('select-none').addEventListener('click', () => { state.selected = []; changed(); });
 
 function renderSelectionSummary() {
   const n = state.selected.length;
-  $('selection-summary').textContent = `${n} of ${BODY_PARTS.length} body parts selected`;
+  $('selection-summary').textContent = `${nf.format(n)} body part${n === 1 ? '' : 's'} selected`;
   $('selection-error').hidden = n > 0;
+}
+
+// --- arms, legs, hands and feet
+const MODE_OPTIONS = { together: 'Both together', separate: 'One at a time' };
+const FIRST_OPTIONS = { L: 'Left first', R: 'Right first' };
+const HAND_OPTIONS = { whole: 'Whole hand', detailed: 'Whole hand in detail', parts: 'Palm, back, fingers', named: 'Each finger named' };
+const FOOT_OPTIONS = { whole: 'Whole foot', detailed: 'Whole foot in detail', parts: 'Heel, sole, top, toes', named: 'Each toe named' };
+
+function say(text) { $('detail-status').textContent = text; }
+
+function setMode(limb, mode) {
+  const key = limb === 'arm' ? 'armMode' : 'legMode';
+  const lvlKey = limb === 'arm' ? 'handLevel' : 'footLevel';
+  if (state[key] === mode) return;
+  state.selected = changeMode(state.selected, limb, state[key], mode);
+  state[key] = mode;
+  const plural = limb === 'arm' ? 'arms' : 'legs';
+  if (mode === 'together' && state[lvlKey] === 'named') {
+    state.selected = changeLevel(state.selected, limb, 'named', 'parts');
+    state[lvlKey] = 'parts';
+    say(`Both ${plural} together can't name single ${limb === 'arm' ? 'fingers' : 'toes'}, so they are scanned as a group.`);
+  } else {
+    say(mode === 'together' ? `Both ${plural} are scanned in the same step.` : `Each ${limb} is scanned on its own, one after the other.`);
+  }
+  changed();
+}
+
+function setLevel(limb, level) {
+  const key = limb === 'arm' ? 'handLevel' : 'footLevel';
+  if (state[key] === level) return;
+  const plural = limb === 'arm' ? 'arms' : 'legs';
+  let message = '';
+  if (level === 'named' && modeOf(limb) === 'together') {
+    state.selected = changeMode(state.selected, limb, 'together', 'separate');
+    state[limb === 'arm' ? 'armMode' : 'legMode'] = 'separate';
+    message = `The ${plural} are now scanned one at a time so each ${limb === 'arm' ? 'finger' : 'toe'} can be named. `;
+  }
+  state.selected = changeLevel(state.selected, limb, state[key], level);
+  state[key] = level;
+  say(message + (limb === 'arm' ? 'Hands' : 'Feet') + ': ' + (limb === 'arm' ? HAND_OPTIONS : FOOT_OPTIONS)[level] + '.');
+  changed();
+}
+
+function renderDetail() {
+  renderRadios($('arm-mode'), 'armMode', MODE_OPTIONS, state.armMode, (v) => setMode('arm', v));
+  renderRadios($('leg-mode'), 'legMode', MODE_OPTIONS, state.legMode, (v) => setMode('leg', v));
+  renderRadios($('first-side'), 'firstSide', FIRST_OPTIONS, state.firstSide, (v) => { state.firstSide = v; changed(); });
+  $('side-fieldset').hidden = (state.armMode === 'together' && state.legMode === 'together') || state.direction === 'custom';
+  renderRadios($('hand-level'), 'handLevel', HAND_OPTIONS, state.handLevel, (v) => setLevel('arm', v));
+  renderRadios($('foot-level'), 'footLevel', FOOT_OPTIONS, state.footLevel, (v) => setLevel('leg', v));
+  const sep = [state.armMode === 'separate' && 'arms', state.legMode === 'separate' && 'legs'].filter(Boolean).join(' and ');
+  $('diagram-side-note').textContent = sep
+    ? `Your ${sep} are scanned one at a time. Tap the left or right side separately. The front view shows your left on the right.`
+    : '';
 }
 
 // Tabs: diagram / list
@@ -237,9 +475,7 @@ for (const id of ['tab-diagram', 'tab-list']) {
 // ---------------------------------------------------------------- order
 function renderOrder(focusPart, focusAction) {
   const parts = scanOrder();
-  const defaultSeq = DEFAULT_ORDER.filter((id) => parts.includes(id));
-  const kind = parts.join() === defaultSeq.join() ? 'Head to toe'
-    : parts.join() === [...defaultSeq].reverse().join() ? 'Toe to head' : 'Custom order';
+  const kind = { down: 'Head to toe', up: 'Toe to head', custom: 'Custom order' }[state.direction];
   $('order-summary').textContent = parts.length
     ? `${kind}: ${PART_BY_ID[parts[0]].name} first${parts.length > 1 ? `, ${PART_BY_ID[parts.at(-1)].name} last` : ''}`
     : 'No body parts selected';
@@ -287,16 +523,19 @@ $('order-list').addEventListener('click', (e) => {
   const i = parts.indexOf(id);
   const j = act === 'up' ? i - 1 : i + 1;
   if (j < 0 || j >= parts.length) return;
-  // swap the two parts' positions in the full order
-  const a = state.order.indexOf(parts[i]);
-  const b = state.order.indexOf(parts[j]);
-  [state.order[a], state.order[b]] = [state.order[b], state.order[a]];
+  // swap the two parts' positions in the full order, which then becomes the saved custom order
+  const full = fullOrder();
+  const a = full.indexOf(parts[i]);
+  const b = full.indexOf(parts[j]);
+  [full[a], full[b]] = [full[b], full[a]];
+  state.order = full;
+  state.direction = 'custom';
   changed({ skipOrder: true });
   renderOrder(id, act);
   $('order-status').textContent = `${PART_BY_ID[id].name} moved to position ${j + 1} of ${parts.length}.`;
 });
-$('order-down').addEventListener('click', () => { state.order = [...DEFAULT_ORDER]; changed(); $('order-status').textContent = 'Order set to head to toe.'; });
-$('order-up').addEventListener('click', () => { state.order = [...DEFAULT_ORDER].reverse(); changed(); $('order-status').textContent = 'Order set to toe to head.'; });
+$('order-down').addEventListener('click', () => { state.direction = 'down'; changed(); $('order-status').textContent = 'Order set to head to toe.'; });
+$('order-up').addEventListener('click', () => { state.direction = 'up'; changed(); $('order-status').textContent = 'Order set to toe to head.'; });
 
 // ---------------------------------------------------------------- guidance
 function renderGuidance() {
@@ -401,10 +640,128 @@ for (const key of ['voice', 'sound']) {
   });
 }
 
+// ---------------------------------------------------------------- profiles
+// A profile is a saved session setup. Appearance, recent sessions and the other profiles are not part of it.
+const PROFILE_FIELDS = [
+  'minutes', 'selected', 'direction', 'armMode', 'legMode', 'handLevel', 'footLevel', 'firstSide',
+  'style', 'narrator', 'voiceVolume', 'voiceMuted', 'soundVolume', 'soundMuted', 'ambience', 'transition',
+  'countIntro', 'countOutro',
+];
+function profileSnapshot() {
+  const data = {};
+  for (const k of PROFILE_FIELDS) data[k] = structuredClone(state[k]);
+  data.selected = scanOrder();           // saved in scan order
+  if (state.direction === 'custom') data.order = fullOrder();
+  return data;
+}
+// Does the current setup still match what the profile saved?
+function profileMatches(p) {
+  const loaded = { ...structuredClone(DEFAULTS), ...structuredClone(p.data) };
+  normalize(loaded);
+  const key = (s, order) => JSON.stringify([...PROFILE_FIELDS.filter((k) => k !== 'selected').map((k) => s[k]),
+    s.selected.slice().sort(), s.direction === 'custom' ? order : null]);
+  return key(loaded, loaded.order.filter((id) => loaded.selected.includes(id))) === key(state, scanOrder());
+}
+function profileSummary(p) {
+  const d = { ...structuredClone(DEFAULTS), ...structuredClone(p.data) };
+  normalize(d);
+  const n = d.selected.length;
+  return `${d.minutes} min · ${n} body part${n === 1 ? '' : 's'} · ${NARRATORS.find((x) => x.id === d.narrator).name} · ${STYLES[d.style].name}`;
+}
+function profileMessage(text) { $('profile-status').textContent = text; }
+
+let pendingDelete = null;
+let pendingTimer = 0;
+function renderProfiles(focusKey) {
+  const list = $('profile-list');
+  const wanted = focusKey ?? (list.contains(document.activeElement) ? document.activeElement.dataset.key : null);
+  list.replaceChildren(...state.profiles.map((p) => {
+    const active = p.id === state.activeProfile;
+    const li = document.createElement('li');
+    li.className = 'profile-item';
+    li.dataset.id = p.id;
+    li.dataset.active = String(active);
+    const tag = active ? (profileMatches(p) ? 'In use' : 'In use, changed') : '';
+    li.innerHTML = `<button type="button" class="profile-use" data-act="use" data-key="${p.id}:use"><strong></strong><small></small></button>
+      <button type="button" class="btn ghost small" data-act="update" data-key="${p.id}:update">Update</button>
+      <button type="button" class="btn ghost small" data-act="delete" data-key="${p.id}:delete"></button>`;
+    li.querySelector('strong').textContent = p.name;
+    li.querySelector('small').textContent = `${profileSummary(p)}${tag ? ` · ${tag}` : ''}`;
+    li.querySelector('[data-act="use"]').setAttribute('aria-label', `Use profile ${p.name}: ${profileSummary(p)}${tag ? `, ${tag}` : ''}`);
+    li.querySelector('[data-act="update"]').setAttribute('aria-label', `Update ${p.name} with the current setup`);
+    const del = li.querySelector('[data-act="delete"]');
+    del.textContent = pendingDelete === p.id ? 'Tap again' : 'Delete';
+    del.setAttribute('aria-label', pendingDelete === p.id ? `Confirm deleting ${p.name}` : `Delete ${p.name}`);
+    return li;
+  }));
+  if (wanted) list.querySelector(`[data-key="${CSS.escape(wanted)}"]`)?.focus();
+}
+
+function applyProfile(p) {
+  const loaded = { ...structuredClone(DEFAULTS), ...structuredClone(p.data) };
+  normalize(loaded);
+  for (const k of PROFILE_FIELDS) state[k] = loaded[k];
+  state.order = loaded.order;
+  state.activeProfile = p.id;
+  profileMessage(`Loaded ${p.name}.`);
+  changed();
+}
+
+$('profile-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const p = state.profiles.find((x) => x.id === btn.closest('li').dataset.id);
+  if (!p) return;
+  const act = btn.dataset.act;
+  if (act !== 'delete') pendingDelete = null;
+  if (act === 'use') applyProfile(p);
+  else if (act === 'update') {
+    p.data = profileSnapshot();
+    state.activeProfile = p.id;
+    profileMessage(`Updated ${p.name} with the current setup.`);
+    changed();
+  } else if (pendingDelete === p.id) {
+    clearTimeout(pendingTimer);
+    pendingDelete = null;
+    state.profiles = state.profiles.filter((x) => x.id !== p.id);
+    if (state.activeProfile === p.id) state.activeProfile = null;
+    profileMessage(`Deleted ${p.name}.`);
+    changed();
+    $('profile-name').focus();
+  } else {
+    pendingDelete = p.id;
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => { pendingDelete = null; renderProfiles(); }, 4000);
+    profileMessage(`Tap Delete again to delete ${p.name}.`);
+    renderProfiles();
+  }
+});
+
+function saveProfile() {
+  const name = $('profile-name').value.trim().replace(/\s+/g, ' ');
+  if (!name) { profileMessage('Enter a name for this profile first.'); $('profile-name').focus(); return; }
+  if (!state.selected.length) { profileMessage('Choose at least one body part before saving.'); return; }
+  const existing = state.profiles.find((p) => p.name.toLowerCase() === name.toLowerCase());
+  if (existing) {
+    existing.data = profileSnapshot();
+    state.activeProfile = existing.id;
+    profileMessage(`Updated ${existing.name} with the current setup.`);
+  } else {
+    if (state.profiles.length >= MAX_PROFILES) { profileMessage(`You can keep up to ${MAX_PROFILES} profiles. Delete one to make room.`); return; }
+    const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    state.profiles.push({ id, name, data: profileSnapshot() });
+    state.activeProfile = id;
+    profileMessage(`Saved ${name}. Tap it any time to bring this setup back.`);
+  }
+  $('profile-name').value = '';
+  changed();
+}
+$('profile-save').addEventListener('click', saveProfile);
+$('profile-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveProfile(); } });
+
 // ---------------------------------------------------------------- recent
 function recentLabel(r) {
-  const full = r.parts.length === DEFAULT_ORDER.length;
-  return `${r.minutes} min · ${full ? 'Full body' : `${r.parts.length} part${r.parts.length > 1 ? 's' : ''}`} · ${STYLES[r.style]?.name ?? ''}`;
+  return `${r.minutes} min · ${r.parts.length} body part${r.parts.length > 1 ? 's' : ''} · ${STYLES[r.style]?.name ?? ''}`;
 }
 function renderRecent() {
   const list = state.recent.filter((r) => r.parts?.every((id) => PART_BY_ID[id]));
@@ -418,7 +775,9 @@ function renderRecent() {
     b.addEventListener('click', () => {
       state.minutes = r.minutes;
       state.selected = [...r.parts];
-      state.order = [...r.parts, ...DEFAULT_ORDER.filter((id) => !r.parts.includes(id))];
+      Object.assign(state, inferConfig(state.selected, state));
+      state.direction = 'custom';
+      state.order = [...r.parts];
       if (STYLES[r.style]) state.style = r.style;
       changed();
     });
@@ -437,8 +796,11 @@ function changed({ skipOrder = false } = {}) {
   const a = document.activeElement;
   const refocus = a?.type === 'radio' ? `input[name="${a.name}"][value="${a.value}"]` : null;
   renderDuration();
+  renderProfiles();
+  renderRegions();
+  renderDetail();
   diagram.refresh();
-  renderPartList();
+  renderPartTree();
   renderSelectionSummary();
   if (!skipOrder) renderOrder();
   renderGuidance();
@@ -462,6 +824,10 @@ function openReview() {
     ['Length', fmtDuration(state.minutes * 60)],
     ['Body parts', `${parts.length}`],
   ];
+  const profile = state.profiles.find((p) => p.id === state.activeProfile);
+  if (profile) rows.push(['Profile', profileMatches(profile) ? profile.name : `${profile.name} (changed)`]);
+  const separate = [state.armMode === 'separate' && 'arms', state.legMode === 'separate' && 'legs'].filter(Boolean);
+  if (separate.length) rows.push([`${separate.join(' and ')[0].toUpperCase()}${separate.join(' and ').slice(1)}`, `One at a time, ${state.firstSide === 'L' ? 'left' : 'right'} first`]);
   if (plan?.ok) {
     const { min, max } = plan.perPart;
     rows.push(['Each body part', min === max ? fmtDuration(min) : `${fmtDuration(min)} – ${fmtDuration(max)}`]);
@@ -554,7 +920,7 @@ function renderPlayer(s) {
     next = `First: ${PART_BY_ID[plan.segments[0].partId].name}`;
   } else if (where.section === 'part') {
     const i = where.seg.index;
-    step = `Body part ${i + 1} of ${total}`;
+    step = `Body part ${i + 1} of ${total} · ${PART_BY_ID[where.seg.partId].group}`;
     title = PART_BY_ID[where.seg.partId].name;
     next = i + 1 < total ? `Next: ${PART_BY_ID[plan.segments[i + 1].partId].name}` : 'Last body part';
   } else {
@@ -668,7 +1034,9 @@ for (const [id, key] of [['count-intro', 'countIntro'], ['count-outro', 'countOu
 $('open-settings').addEventListener('click', () => { renderSettings(); $('settings-dialog').showModal(); });
 $('forget-prefs').addEventListener('click', () => {
   try { localStorage.removeItem(STORE_KEY); } catch { /* ignore */ }
+  const profiles = state.profiles; // saved profiles are favourites, not just "last choices"
   Object.assign(state, structuredClone(DEFAULTS));
+  state.profiles = profiles;
   applyTheme();
   renderSettings();
   changed();

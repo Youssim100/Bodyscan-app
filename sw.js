@@ -1,11 +1,11 @@
 // Offline support.
 // 1. Install caches the small app shell, so the app opens offline right away.
-// 2. Voices (~7 MB) download one clip at a time into their own cache when the page
+// 2. Voices (~25 MB) download one clip at a time into their own cache when the page
 //    asks ('cache-audio'). An interrupted download resumes on the next visit, and
 //    progress is reported to the page.
 // Bump VERSION whenever app files change. Bump AUDIO_CACHE only when voice files change.
-const VERSION = 'bodyscan-v5';
-const AUDIO_CACHE = 'bodyscan-audio-v1';
+const VERSION = 'bodyscan-v7';
+const AUDIO_CACHE = 'bodyscan-audio-v2';
 const CORE = [
   './',
   'index.html',
@@ -14,6 +14,8 @@ const CORE = [
   'js/audio.js',
   'js/body.js',
   'js/content.js',
+  'js/selection.js',
+  'js/theme.js',
   'js/session.js',
   'js/timing.js',
   'data/durations.json',

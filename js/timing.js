@@ -1,6 +1,6 @@
 // Pure session planning: equal segment allocation and the narration timeline.
 // No DOM or audio here, so it runs in Node tests too.
-import { SEQUENCES, PROMPTS, partClip } from './content.js';
+import { SEQUENCES, PROMPTS, partClip, entryClip } from './content.js';
 
 export const INTRO_LEAD = 3;        // opening bell rings, then narration starts
 export const INTRO_SETTLE = 2;      // quiet after the intro before the first part
@@ -8,6 +8,7 @@ export const OUTRO_LEAD = 1.5;      // quiet at the start of the closing section
 export const BELL_TAIL = 7;         // closing bell rings in the final seconds
 export const SEG_LEAD = 1;          // narration delay at the start of a part
 export const CHIME_LEAD = 2.5;      // narration delay after a transition chime
+export const ENTRY_GAP = 1.5;       // pause between "now, your left arm only" and the first part of that arm
 export const SEG_TAIL_QUIET = 5;    // last seconds of every part stay quiet
 export const PROMPT_SPACING = 26;   // guided prompts need at least this much room each
 export const MAX_PROMPTS = 4;
@@ -46,10 +47,16 @@ function outroSeconds(kind, seqs, dur) {
   return Math.ceil(OUTRO_LEAD + sequenceLength(seqs[kind === 'full' ? 'outroFull' : 'outroShort'], dur) + 1.5 + BELL_TAIL);
 }
 
+// Narration that comes before a part's own clip: the "left arm only" line, when there is one.
+function entryLength(parts, i, dur) {
+  const entry = entryClip(parts, i);
+  return entry ? dur(entry) + ENTRY_GAP : 0;
+}
+
 // Shortest part length that still leaves room for the part's narration.
 export function minSegmentSeconds(parts, style, transition, dur) {
   const lead = transition === 'chime' ? CHIME_LEAD : SEG_LEAD;
-  const longest = Math.max(...parts.map((p) => dur(partClip(style, p))));
+  const longest = Math.max(...parts.map((p, i) => entryLength(parts, i, dur) + dur(partClip(style, p))));
   return Math.ceil(lead + longest + SEG_TAIL_QUIET);
 }
 
@@ -110,7 +117,9 @@ export function planSession({ totalSeconds: chosenSeconds, parts, style, transit
       lead = CHIME_LEAD;
     }
     const clip = partClip(style, partId);
-    const clipStart = t + lead;
+    const entry = entryClip(parts, i);
+    if (entry) events.push({ at: t + lead, type: 'clip', id: entry, end: t + lead + dur(entry), seg: i });
+    const clipStart = t + lead + entryLength(parts, i, dur);
     events.push({ at: clipStart, type: 'clip', id: clip, end: clipStart + dur(clip), seg: i });
 
     if (style === 'guided') {
